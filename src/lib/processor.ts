@@ -48,7 +48,7 @@ async function analyzeMaven(dir: string, ids: Set<string>, reasons: Record<strin
         } else {
             ids.add('java'); // Default to Java if no Kotlin explicitly defined
         }
-    } catch (e) {}
+    } catch (e) { }
 }
 
 async function analyzeGradle(dir: string, ids: Set<string>, reasons: Record<string, string[]>) {
@@ -74,10 +74,10 @@ async function analyzeGradle(dir: string, ids: Set<string>, reasons: Record<stri
             ids.add('kotlin');
             reasons['kotlin'] = ['Found Kotlin plugin'];
         } else {
-             // If strictly Android, it might be Java or Kotlin.
-             // We let extension scanner confirm Java if Kotlin isn't explicit here.
+            // If strictly Android, it might be Java or Kotlin.
+            // We let extension scanner confirm Java if Kotlin isn't explicit here.
         }
-    } catch (e) {}
+    } catch (e) { }
 }
 
 async function analyzeNode(dir: string, ids: Set<string>, reasons: Record<string, string[]>) {
@@ -87,17 +87,17 @@ async function analyzeNode(dir: string, ids: Set<string>, reasons: Record<string
         const deps = { ...pkg.dependencies, ...pkg.devDependencies };
 
         for (const [key, _] of Object.entries(deps)) {
-             const tmpl = templates.find(t => t.id === key); // e.g. 'react', 'vue', 'express'
-             if (tmpl) {
-                 ids.add(tmpl.id);
-                 reasons[tmpl.id] = [`Dependency: ${key}`];
-             }
+            const tmpl = templates.find(t => t.id === key); // e.g. 'react', 'vue', 'express'
+            if (tmpl) {
+                ids.add(tmpl.id);
+                reasons[tmpl.id] = [`Dependency: ${key}`];
+            }
 
-             // Manual mappings
-             if (key.includes('react-scripts')) ids.add('react');
-             if (key.includes('next')) ids.add('nextjs');
+            // Manual mappings
+            if (key.includes('react-scripts')) ids.add('react');
+            if (key.includes('next')) ids.add('nextjs');
         }
-    } catch (e) {}
+    } catch (e) { }
 }
 
 export interface ProcessConfig {
@@ -128,8 +128,8 @@ export interface DetectionResult {
 
 // Helper to determine if a file is included based on whitelist/blacklist rules
 function isFileIncluded(
-    relPath: string, 
-    rules: Record<string, 'include' | 'exclude'>, 
+    relPath: string,
+    rules: Record<string, 'include' | 'exclude'>,
     isIgnoredByDefault: boolean,
     isMedia: boolean
 ): boolean {
@@ -138,9 +138,9 @@ function isFileIncluded(
     // 1. Check for explicit rule on this file or nearest parent
     let current = relPath;
     while (current !== '.') {
-        // Normalizing path separators
-        const lookup = current.split(path.sep).join('/');
-        
+        // Normalizing path separators: Use regex replace for robust cross-platform handling
+        const lookup = current.replace(/\\/g, '/');
+
         if (rules[lookup] === 'include') return true;
         if (rules[lookup] === 'exclude') return false;
 
@@ -242,7 +242,7 @@ export async function detectCodebase(sourceDir: string): Promise<DetectionResult
 
                     if (content.includes('TXT-Forge')) gitStatus = 'ignored';
 
-                } catch (e) {}
+                } catch (e) { }
 
             }
 
@@ -346,7 +346,7 @@ export async function detectCodebase(sourceDir: string): Promise<DetectionResult
 
                 }
 
-            } catch (e) {}
+            } catch (e) { }
 
         }
 
@@ -540,7 +540,7 @@ export async function detectCodebase(sourceDir: string): Promise<DetectionResult
 
         // OR if we failed to identify a managed project context.
 
-        
+
 
         for (const t of templates) {
 
@@ -564,15 +564,15 @@ export async function detectCodebase(sourceDir: string): Promise<DetectionResult
 
             const triggerMatch = t.triggers.some(trig => {
 
-                 if (trig.startsWith('*')) {
+                if (trig.startsWith('*')) {
 
-                     // Suffix check (e.g. *.go) - verify against root files
+                    // Suffix check (e.g. *.go) - verify against root files
 
-                     return rootFiles.some(f => f.endsWith(trig.slice(1)));
+                    return rootFiles.some(f => f.endsWith(trig.slice(1)));
 
-                 }
+                }
 
-                 return rootFiles.includes(trig);
+                return rootFiles.includes(trig);
 
             });
 
@@ -636,22 +636,22 @@ export async function processFiles(config: ProcessConfig): Promise<ProcessResult
         // Fix: Ensure templateIds is an array before filtering
         const safeTemplateIds = Array.isArray(config.templateIds) ? config.templateIds : [];
         const activeTemplates = templates.filter(t => safeTemplateIds.includes(t.id));
-        
+
         activeTemplates.forEach(t => t.ignores.forEach(ign => ignorePatterns.add(ign.replace(/\/$/, ''))));
 
         // 2. Determine Content Files based on Whitelist/Blacklist Rules
-        
+
         // Step A: Perform a broad scan of candidates. 
         // We include everything initially, then filter using the rules engine.
         // We pass the ignorePatterns to scanFiles, BUT strictly speaking, a Whitelist rule should override a gitignore.
         // However, scanFiles is optimized to skip massive folders like node_modules. 
         // Use standard ignore patterns for the scan, assuming user won't whitelist deep inside node_modules usually.
         // If they do, scanFiles needs to know, but for stability, we stick to standard scan + filter.
-        
+
         const validExtensions = new Set<string>();
         // If specific templates selected, collect extensions.
         activeTemplates.forEach(t => t.extensions.forEach(ext => validExtensions.add(ext)));
-        
+
         // Scan everything (recursively), filtering binaries by default
         // CHANGE: We pass [] as extensions to scanFiles so it returns ALL files.
         // This ensures files NOT in the template extension list are still found, so the Rules Engine can decide their fate.
@@ -664,8 +664,10 @@ export async function processFiles(config: ProcessConfig): Promise<ProcessResult
         const includedRelativePaths = new Set<string>();
 
         for (const fullPath of allCandidates) {
-            const relPath = path.relative(sourceRoot, fullPath).split(path.sep).join('/');
-            
+            // FIX: Robust normalization. Replace ALL backslashes with forward slashes explicitly.
+            // .split(path.sep) relies on the string containing the OS separator, which might not be true if path methods mix them.
+            const relPath = path.relative(sourceRoot, fullPath).replace(/\\/g, '/');
+
             // Determine "Default State" for this file
             // If templates are active, default state depends on extension match.
             // If the file extension is NOT in the template, it is Ignored By Default.
@@ -721,9 +723,10 @@ export async function processFiles(config: ProcessConfig): Promise<ProcessResult
         const visibleTreePaths = new Set<string>();
 
         for (const file of treeScanFiles) {
-            const relPath = path.relative(sourceRoot, file).split(path.sep).join('/');
+            // FIX: Robust normalization for tree generation as well
+            const relPath = path.relative(sourceRoot, file).replace(/\\/g, '/');
             const parts = relPath.split('/');
-            
+
             let currentPath = '';
             let currentChildren = rootNodes;
 
@@ -750,7 +753,7 @@ export async function processFiles(config: ProcessConfig): Promise<ProcessResult
                     pathMap.set(currentPath, node);
                     currentChildren.push(node);
                 }
-                
+
                 if (!isFile && node.children) {
                     currentChildren = node.children;
                 }
@@ -803,8 +806,8 @@ export async function processFiles(config: ProcessConfig): Promise<ProcessResult
                 // Size check for massive files check inside export
                 const stats = await fs.stat(filePath);
                 if (stats.size > 1024 * 1024 * 5) { // Skip > 5MB in content processing
-                     console.warn(`Skipping huge file > 5MB: ${filePath}`);
-                     continue;
+                    console.warn(`Skipping huge file > 5MB: ${filePath}`);
+                    continue;
                 }
 
                 // BINARY CONTENT CHECK (New)
@@ -819,7 +822,7 @@ export async function processFiles(config: ProcessConfig): Promise<ProcessResult
                 const content = await fs.readFile(filePath, 'utf-8');
                 const relPath = path.relative(sourceRoot, filePath);
                 fileMap.push({ original: filePath, relPath, content });
-            } catch (e) { 
+            } catch (e) {
                 console.warn(`Failed to read file: ${filePath}`, e);
             }
         }
@@ -893,7 +896,7 @@ async function isBinaryFile(filePath: string): Promise<boolean> {
         handle = await fs.open(filePath, 'r');
         const buffer = Buffer.alloc(4096);
         const { bytesRead } = await handle.read(buffer, 0, 4096, 0);
-        
+
         // Check for null bytes in the read chunk
         for (let i = 0; i < bytesRead; i++) {
             if (buffer[i] === 0) return true;
@@ -910,7 +913,7 @@ async function cleanDirectory(dir: string) {
     try {
         await fs.rm(dir, { recursive: true, force: true });
         await fs.mkdir(dir, { recursive: true });
-    } catch (e) {}
+    } catch (e) { }
 }
 
 /**
@@ -936,7 +939,7 @@ async function deepScanExtensions(dir: string, depth: number): Promise<Set<strin
         }
     } catch (e) {
         // ADD THIS:
-        logDebug(`Error scanning dir ${dir}:`, e);
+        logDebug(`Error scanning dir ${dir}:`);
     }
 
     return extensions;
@@ -1005,7 +1008,7 @@ async function mergeFiles(
             fullContent += treeContent;
             fullContent += "\n" + "=".repeat(50) + "\n\n";
         }
-        
+
         // Sort files by path for consistency
         files.sort((a, b) => a.relPath.localeCompare(b.relPath));
 
