@@ -127,6 +127,7 @@ export interface DetectionResult {
 }
 
 // Helper to determine if a file is included based on whitelist/blacklist rules
+// Helper to determine if a file is included based on whitelist/blacklist rules
 function isFileIncluded(
     relPath: string,
     rules: Record<string, 'include' | 'exclude'>,
@@ -135,23 +136,28 @@ function isFileIncluded(
 ): boolean {
     if (isMedia) return false; // Never include media content text
 
-    // 1. Check for explicit rule on this file or nearest parent
-    let current = relPath;
-    while (current !== '.') {
-        // Normalizing path separators: Use regex replace for robust cross-platform handling
-        const lookup = current.replace(/\\/g, '/');
+    // 1. Normalize path to ensure it matches UI keys (always forward slashes)
+    let current = relPath.replace(/\\/g, '/');
 
-        if (rules[lookup] === 'include') return true;
-        if (rules[lookup] === 'exclude') return false;
+    // 2. Traverse up the folder tree checking for rules at every level
+    while (true) {
+        // Check for explicit rule on this specific path (file or folder)
+        if (rules[current] === 'include') return true;
+        if (rules[current] === 'exclude') return false;
 
-        const parent = path.dirname(current);
-        if (parent === current) break; // Reached root
-        current = parent;
+        // If we just checked the root ('.'), we are done searching.
+        if (current === '.' || current === '') break;
+
+        // Move to parent directory using string manipulation
+        // We avoid path.dirname() to prevent OS-specific separator mismatches
+        const lastSlash = current.lastIndexOf('/');
+        if (lastSlash === -1) {
+            // We are at a top-level file (e.g. "README.md"), so parent is root
+            current = '.';
+        } else {
+            current = current.substring(0, lastSlash);
+        }
     }
-
-    // 2. Check root rule (".")
-    if (rules['.'] === 'include') return true;
-    if (rules['.'] === 'exclude') return false;
 
     // 3. Fallback to default state (Templates + GitIgnore)
     return !isIgnoredByDefault;
@@ -657,7 +663,14 @@ export async function processFiles(config: ProcessConfig): Promise<ProcessResult
         // This ensures files NOT in the template extension list are still found, so the Rules Engine can decide their fate.
         const allCandidates = await scanFiles(sourceRoot, sourceRoot, [], Array.from(ignorePatterns), false);
 
-        const rules = config.selectionRules || {};
+        // --- CHANGE START: Normalize Rules Keys ---
+        // Ensure all rule keys use forward slashes to match the file scanner's paths
+        const rawRules = config.selectionRules || {};
+        const rules: Record<string, 'include' | 'exclude'> = {};
+        for (const [key, val] of Object.entries(rawRules)) {
+            rules[key.replace(/\\/g, '/')] = val;
+        }
+        // --- CHANGE END ---
         const explicitFiles = new Set<string>();
 
         // We also need a set of relative paths that are included, to pass to the Tree Generator for the [✓] indicators

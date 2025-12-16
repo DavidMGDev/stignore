@@ -134,7 +134,7 @@ export async function scanDirectory(
         // Check simple ignore logic (System files)...
         let isIgnored = isSystemIgnored(entry.name);
         if (!isIgnored) {
-             isIgnored = activeIgnores.some(pattern => {
+            isIgnored = activeIgnores.some(pattern => {
                 // ... existing regex logic ...
                 let p = pattern.trim();
                 if (!p || p.startsWith('#')) return false;
@@ -152,7 +152,7 @@ export async function scanDirectory(
                 }
                 if (!p.includes('/')) return entry.name === p;
                 return normalizedRelPath === p || normalizedRelPath.startsWith(p + '/');
-             });
+            });
         }
 
         // --- MASSIVE & MEDIA CHECKS ---
@@ -178,14 +178,19 @@ export async function scanDirectory(
             try {
                 const stats = await fs.stat(fullPath);
                 if (stats.size > MAX_FILE_SIZE_MB) isMassive = true;
-            } catch(e) {}
+            } catch (e) { }
         }
 
         // ------------------------------
 
+        // --- CHANGE START ---
+        // Ensure the ID/Path sent to frontend is always forward-slash normalized
+        // This prevents "src\lib" vs "src/lib" mismatches in selection rules
+        const normalizedPath = relPath.replace(/\\/g, '/');
+
         const node: TreeNode = {
             name: entry.name,
-            path: relPath,
+            path: normalizedPath, // <--- CHANGED from 'relPath' to 'normalizedPath'
             type: isDirectory ? 'folder' : 'file',
             isIgnored: isIgnored,
             isMedia: isMedia,
@@ -193,6 +198,7 @@ export async function scanDirectory(
             children: children,
             depth: depth
         };
+        // --- CHANGE END ---
 
         nodes.push(node);
     }
@@ -204,9 +210,9 @@ export async function scanDirectory(
  * Generates a visual tree string for the Source-Tree.txt file
  */
 export function generateTreeString(
-    nodes: TreeNode[], 
+    nodes: TreeNode[],
     // selectedPaths determines VISIBILITY in the tree (structure)
-    selectedPaths: Set<string>, 
+    selectedPaths: Set<string>,
     // includedContentPaths determines the STATUS MARKER (✓/✕)
     includedContentPaths: Set<string>,
     prefix = ''
@@ -221,7 +227,7 @@ export function generateTreeString(
         const isLast = i === validNodes.length - 1;
         const connector = isLast ? '└── ' : '├── ';
         const childPrefix = isLast ? '    ' : '│   ';
-        
+
         // Determine suffix
         let suffix = '';
         if (node.type === 'file') {
@@ -234,7 +240,7 @@ export function generateTreeString(
         }
 
         output += prefix + connector + node.name + (node.type === 'folder' ? '/' : '') + suffix + '\n';
-        
+
         if (node.children && node.children.length > 0) {
             output += generateTreeString(node.children, selectedPaths, includedContentPaths, prefix + childPrefix);
         }
