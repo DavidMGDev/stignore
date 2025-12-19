@@ -1004,7 +1004,7 @@ async function mergeFiles(
     outputDir: string,
     maxChars: number,
     disableSplitting: boolean = false,
-    treeContent: string = "" // <--- NEW PARAMETER
+    treeContent: string = ""
 ): Promise<string[]> {
 
     const createdFiles: string[] = [];
@@ -1014,15 +1014,12 @@ async function mergeFiles(
     if (disableSplitting) {
         const filename = `Source-1 (Full Context).txt`;
 
-        // Start with the Tree content if provided
         let fullContent = "";
         if (treeContent) {
-            // NOTE: The caller (processFiles) now provides the Header and Legend inside treeContent.
             fullContent += treeContent;
             fullContent += "\n" + "=".repeat(50) + "\n\n";
         }
 
-        // Sort files by path for consistency
         files.sort((a, b) => a.relPath.localeCompare(b.relPath));
 
         for (const file of files) {
@@ -1035,8 +1032,6 @@ async function mergeFiles(
     }
 
     // --- STANDARD SPLIT MODE ---
-    // 1. Separate Standard vs Multipart
-    // We preserve the incoming order (Source Tree order) for standard files.
     const standardFiles: { relPath: string, fullText: string }[] = [];
     const multipartFiles: { relPath: string, content: string }[] = [];
 
@@ -1051,72 +1046,95 @@ async function mergeFiles(
         }
     }
 
-    // 2. Process Standard Files (Linear Fill)
+    // Process Standard Files
     let currentBuffer = "";
     let currentBufferIndex: string[] = [];
 
     const flushBuffer = async () => {
         if (currentBuffer.length === 0) return;
-
         const filename = `Source-${fileIndex} (${currentBufferIndex.length} Files).txt`;
         const indexHeader = "--- INDEX ---\n" + currentBufferIndex.join('\n') + "\n" + "-".repeat(30) + "\n\n";
-
         await fs.writeFile(path.join(outputDir, filename), indexHeader + currentBuffer, 'utf-8');
         createdFiles.push(filename);
-
         fileIndex++;
         currentBuffer = "";
         currentBufferIndex = [];
     };
 
     for (const item of standardFiles) {
-        // If adding this file exceeds limit, flush current buffer first
         if (currentBuffer.length + item.fullText.length > maxChars) {
             await flushBuffer();
         }
-
         currentBuffer += item.fullText;
         currentBufferIndex.push(item.relPath);
     }
-
-    // Flush remaining standard files
     await flushBuffer();
 
-    // 3. Process Multipart Files (At the end)
+    // --- PROCESS MULTIPART FILES (FIXED) ---
     for (const file of multipartFiles) {
         let remaining = file.content;
         let part = 1;
-        const totalParts = Math.ceil(remaining.length / (maxChars - 500));
+        // Estimate parts (will be imprecise but useful for labeling)
+        const estimatedParts = Math.ceil(remaining.length / (maxChars - 500));
 
         while (remaining.length > 0) {
-            const header = `\n${'='.repeat(50)}\nFile: ${file.relPath} (Part ${part}/${totalParts})\n${'='.repeat(50)}\n\n`;
-            const availableSpace = maxChars - header.length;
+            // 1. CRITICAL ERROR: LIMIT 999 PARTS
+            if (part > 999) {
+                throw new Error(`Critical Error: File ${file.relPath} exceeded 999 parts. Export cancelled to prevent infinite loop.`);
+            }
+
+            // Construct Headers to calculate TRUE available space
+            const partStr = `${file.relPath} (Part ${part}/${estimatedParts})`;
+            const indexHeader = "--- INDEX ---\n" + partStr + "\n" + "-".repeat(30) + "\n\n";
+            const fileHeader = `\n${'='.repeat(50)}\nFile: ${partStr}\n${'='.repeat(50)}\n\n`;
+            
+            // Total overhead for this file
+            const totalOverhead = indexHeader.length + fileHeader.length;
+            const availableSpace = maxChars - totalOverhead;
+
+            // Safety: If maxChars is too small for headers
+            if (availableSpace < 100) {
+                 throw new Error(`Configuration Error: maxChars (${maxChars}) is too small to fit file headers.`);
+            }
 
             const filename = `Source-${fileIndex}.${part} (Multipart File).txt`;
-            let contentToWrite = "";
+            let splitIdx = -1;
 
             if (remaining.length <= availableSpace) {
-                contentToWrite = header + remaining + "\n\n";
-                remaining = "";
+                // Fits entirely
+                splitIdx = remaining.length;
             } else {
-                // Smart Split
-                let splitIdx = -1;
+                // Smart Split Logic
                 const searchWindow = remaining.substring(0, availableSpace);
                 let match;
                 SAFE_SPLIT_REGEX.lastIndex = 0;
+                
+                // Find the LAST safe split point in the window
                 while ((match = SAFE_SPLIT_REGEX.exec(searchWindow)) !== null) {
                     splitIdx = match.index;
                 }
-                if (splitIdx === -1) splitIdx = searchWindow.lastIndexOf('\n');
-                if (splitIdx === -1) splitIdx = availableSpace;
 
-                contentToWrite = header + remaining.substring(0, splitIdx) + "\n\n";
-                remaining = remaining.substring(splitIdx);
+                // If no safe split found (or found at index 0), try newline
+                if (splitIdx <= 0) splitIdx = searchWindow.lastIndexOf('\n');
+                
+                // 3. FORCE PROGRESS: If still invalid, force split at limit
+                if (splitIdx <= 0) splitIdx = availableSpace;
             }
 
-            const indexHeader = "--- INDEX ---\n" + `${file.relPath} (Part ${part}/${totalParts})` + "\n" + "-".repeat(30) + "\n\n";
-            await fs.writeFile(path.join(outputDir, filename), indexHeader + contentToWrite, 'utf-8');
+            // Extract content chunk
+            const chunk = remaining.substring(0, splitIdx);
+
+            // 2. ERROR HANDLING: EMPTY CHUNK
+            if (!chunk && remaining.length > 0) {
+                 throw new Error(`Critical Error: Generated empty multipart chunk for ${file.relPath}.`);
+            }
+
+            // Write File
+            await fs.writeFile(path.join(outputDir, filename), indexHeader + fileHeader + chunk + "\n\n", 'utf-8');
             createdFiles.push(filename);
+
+            // Advance
+            remaining = remaining.substring(splitIdx);
             part++;
         }
         fileIndex++;
