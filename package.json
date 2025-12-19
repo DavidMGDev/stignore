@@ -1,6 +1,6 @@
 {
   "name": "txt-forge",
-  "version": "1.4.9",
+  "version": "1.4.10",
   "description": "Turn any code folder into AI-ready text files instantly.",
   "type": "module",
   "bin": {
