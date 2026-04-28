@@ -4,6 +4,7 @@
     import { templates } from "$lib/templates";
 
     import FileTreeNode from "$lib/components/FileTreeNode.svelte";
+    import PretextButton from "$lib/components/PretextButton.svelte";
 
     import { fade, slide } from "svelte/transition";
 
@@ -1033,7 +1034,7 @@
         }
     }
 
-    async function runForge(mode: "root" | "global" | "custom") {
+    async function runForge(mode: "root" | "global" | "custom" | "clipboard") {
         logUI("runForge initiated", mode);
 
         isProcessing = true;
@@ -1078,6 +1079,19 @@
                 // 1. Stop loader
 
                 isProcessing = false;
+
+                if (mode === "clipboard" && result.clipboardText) {
+                    try {
+                        await navigator.clipboard.writeText(result.clipboardText);
+                        successOutputPath = "Clipboard";
+                        showSuccessDialog = true;
+                    } catch (err) {
+                        dialogTitle = "Clipboard Error";
+                        dialogMessage = "Failed to copy to clipboard. Make sure you are in a secure context.";
+                        showErrorDialog = true;
+                    }
+                    return; // Skip normal file UI flow
+                }
 
                 // 2. Wait for loader transition to effectively start clearing
 
@@ -2367,6 +2381,9 @@
                         </div>
                     </div>
                 </button>
+                
+                <!-- PRETEXT ASCII BUTTON: COPY TO CLIPBOARD -->
+                <PretextButton variant="rotated" onclick={() => runForge("clipboard")} disabled={isProcessing || selectedIds.length === 0} />
             </div>
         </div>
     </div>

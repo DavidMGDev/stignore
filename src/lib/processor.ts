@@ -26,7 +26,7 @@ const BINARY_EXTENSIONS = new Set([
     '.keystore', '.jks'
 ]);
 
-export type SaveMode = 'root' | 'global' | 'custom';
+export type SaveMode = 'root' | 'global' | 'custom' | 'clipboard';
 
 // --- HELPER FUNCTIONS ---
 
@@ -118,6 +118,7 @@ interface ProcessResult {
     outputPath: string;
     files: string[];
     gitIgnoreModified?: boolean; // <--- NEW FIELD
+    clipboardText?: string; // <--- ADDED
 }
 
 export interface DetectionResult {
@@ -797,6 +798,7 @@ export async function processFiles(config: ProcessConfig): Promise<ProcessResult
         if (config.saveMode === 'root') outputBaseDir = path.join(sourceRoot, 'TXT-Forge');
         else if (config.saveMode === 'global') outputBaseDir = path.join(os.homedir(), '.txt-forge-vault', projectName);
         else if (config.saveMode === 'custom' && config.customPath) outputBaseDir = path.resolve(config.customPath);
+        else if (config.saveMode === 'clipboard') outputBaseDir = '';
         else throw new Error("Invalid save path configuration.");
 
         let gitIgnoreModified = false;
@@ -807,8 +809,11 @@ export async function processFiles(config: ProcessConfig): Promise<ProcessResult
 
         }
 
-        const mergedDir = path.join(outputBaseDir, 'Merged');
-        await cleanDirectory(mergedDir);
+        let mergedDir = '';
+        if (config.saveMode !== 'clipboard') {
+            mergedDir = path.join(outputBaseDir, 'Merged');
+            await cleanDirectory(mergedDir);
+        }
 
         // --- READ & MERGE (Keep existing logic) ---
 
@@ -850,23 +855,39 @@ export async function processFiles(config: ProcessConfig): Promise<ProcessResult
         const finalTreeContent = `${header}${legend}repository/\n${indentedBody}`;
 
         let generatedFiles: string[] = [];
-        if (config.disableSplitting) {
-            // Single File Mode: Pass FULL tree content (Header+Legend+Tree)
-            // Note: We updated mergeFiles to NOT prepend the header anymore.
-            generatedFiles = await mergeFiles(fileMap, mergedDir, config.maxChars, true, finalTreeContent);
+        let clipboardText: string | undefined = undefined;
+        
+        if (config.saveMode === 'clipboard') {
+            let fullContent = "";
+            if (finalTreeContent) {
+                fullContent += finalTreeContent + "\n" + "=".repeat(50) + "\n\n";
+            }
+            fileMap.sort((a, b) => a.relPath.localeCompare(b.relPath));
+            for (const file of fileMap) {
+                const fileHeader = `\n${'='.repeat(50)}\nFile: ${file.relPath}\n${'='.repeat(50)}\n\n`;
+                fullContent += fileHeader + file.content + "\n\n";
+            }
+            clipboardText = fullContent;
         } else {
-            // Normal Mode: Write separate tree file
-            await fs.writeFile(path.join(mergedDir, 'Source-Tree.txt'), finalTreeContent, 'utf-8');
-            generatedFiles = await mergeFiles(fileMap, mergedDir, config.maxChars, false);
-            generatedFiles.unshift('Source-Tree.txt');
+            if (config.disableSplitting) {
+                // Single File Mode: Pass FULL tree content (Header+Legend+Tree)
+                // Note: We updated mergeFiles to NOT prepend the header anymore.
+                generatedFiles = await mergeFiles(fileMap, mergedDir, config.maxChars, true, finalTreeContent);
+            } else {
+                // Normal Mode: Write separate tree file
+                await fs.writeFile(path.join(mergedDir, 'Source-Tree.txt'), finalTreeContent, 'utf-8');
+                generatedFiles = await mergeFiles(fileMap, mergedDir, config.maxChars, false);
+                generatedFiles.unshift('Source-Tree.txt');
+            }
         }
 
         return {
             success: true,
-            message: "Processing Complete",
-            outputPath: mergedDir,
+            message: config.saveMode === 'clipboard' ? "Copied to clipboard" : "Processing Complete",
+            outputPath: config.saveMode === 'clipboard' ? "Clipboard" : mergedDir,
             files: generatedFiles,
-            gitIgnoreModified // <--- Pass status
+            gitIgnoreModified, // <--- Pass status
+            clipboardText
         };
     } catch (error: any) {
         return { success: false, message: error.message || "Unknown Error", outputPath: '', files: [] };

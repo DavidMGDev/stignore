@@ -47,6 +47,7 @@
     "vite": "^7.2.4"
   },
   "dependencies": {
+    "@chenglou/pretext": "^0.0.4",
     "open": "^10.0.0",
     "polka": "^0.5.2",
     "sirv": "^2.0.0"
