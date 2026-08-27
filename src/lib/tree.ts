@@ -1,249 +1,216 @@
 import fs from 'fs/promises';
 import path from 'path';
-
-// ADD THIS:
 import { logDebug } from '$lib/server/logger.js';
+import { matchRule, type Rule } from '$lib/stignore';
 
 export interface TreeNode {
     name: string;
-    path: string; // Relative path from root
+    /** Path relative to the folder root, forward slashes, no leading slash. */
+    path: string;
     type: 'file' | 'folder';
     children?: TreeNode[];
-    isIgnored: boolean; // True if matched by .gitignore or system hidden
-    isMedia: boolean;
-    // ADD THIS:
-    isMassive: boolean;
     depth: number;
+    /** Syncthing will skip this path given the current .stignore. */
+    isIgnored: boolean;
+    /** The pattern that decided, ignored or negated. Null when nothing matched. */
+    decidedBy: string | null;
+    /** The deciding rule was a `!` negation, so this path syncs on purpose. */
+    isNegated: boolean;
+    /** The deciding line sits inside our managed block. */
+    isManaged: boolean;
+    /** Name is on the junk list, so the auto-detect button would pick it up. */
+    isJunk: boolean;
+    /** Not walked into. Either a known-huge directory or one with too many entries. */
+    isMassive: boolean;
+    /** Syncthing owns this name. A rule for it would do nothing. */
+    neverSynced: boolean;
 }
 
-const SYSTEM_HIDDEN = [
-    '.git',
-    '.DS_Store',
-    'Thumbs.db',
-    'node_modules',
-    '.godot', // <--- ADDED
-    '.svelte-kit',
-    '.txt-forge-vault',
-    'TXT-Forge',
-    'package-lock.json',
-    'yarn.lock',
-    'pnpm-lock.yaml',
-    'bun.lockb'
-];
-
-// ADD THIS LIST:
-
-const MEDIA_EXTENSIONS = new Set([
-    '.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.svg', '.bmp', '.tiff',
-    '.dds', '.tga', '.hdr', '.exr',
-    '.mp3', '.wav', '.ogg', '.mp4', '.webm', '.mov', '.avi',
-    // Godot Binary Formats
-    '.res', '.scn',
-    // Issue #3 Fix: Add 3D formats here
-    '.fbx', '.obj', '.blend', '.glb', '.gltf', '.3ds',
-    '.pdf', '.zip', '.tar', '.gz', '.7z', '.rar',
-    '.exe', '.dll', '.so', '.dylib', '.bin',
-    '.ttf', '.otf', '.woff', '.woff2', '.eot'
+/**
+ * Directories that are generated, reinstallable, and expensive to sync.
+ * Syncing these is what makes a Syncthing folder thrash: thousands of small
+ * files, rewritten constantly, that any machine can rebuild on its own.
+ *
+ * Everything here has a name that is unambiguous in practice. Names that are
+ * sometimes generated and sometimes hand-written stay off the list, because
+ * one wrong auto-ignore silently stops syncing real work. `bin`, `env`, `out`,
+ * `lib` and `vendor` all failed that bar and are deliberately absent. The user
+ * can still tick those in the tree and use the selection button.
+ */
+export const JUNK_DIRS = new Set([
+    // JavaScript
+    'node_modules', 'bower_components', '.next', '.nuxt', '.svelte-kit',
+    '.output', '.turbo', '.parcel-cache', '.vite', '.yarn',
+    // Python
+    '.venv', 'venv', '__pycache__', '.tox', '.mypy_cache',
+    '.pytest_cache', '.ruff_cache', '.ipynb_checkpoints',
+    // Compiled output
+    'dist', 'build', 'target', 'obj', 'CMakeFiles',
+    // Tooling caches
+    '.gradle', '.cache', '.terraform', 'coverage', 'Pods', 'DerivedData',
+    '.godot', '.dart_tool', '.stack-work'
+    // `.git` is deliberately not here. It is not junk, losing one is
+    // unrecoverable, and plenty of people sync repositories on purpose. It is
+    // still in MASSIVE_DIRS so the tree does not walk it, and the user can
+    // still tick it by hand in two seconds.
 ]);
-
-const MASSIVE_FOLDERS = new Set([
-    'node_modules', 'bower_components', 'vendor',
-    '.git', '.svn', '.hg',
-    '.godot', // <--- ADDED
-    '.svelte-kit', '.next', '.nuxt', '.output',
-    'dist', 'build', 'out', 'target',
-    'CMakeFiles', '.gradle', '.idea', '.vscode'
-]);
-
-const MAX_FOLDER_ITEMS = 150;
-const MAX_FILE_SIZE_MB = 1 * 1024 * 1024; // 1MB
 
 /**
- * specific ignore logic for the tree view (lighter than the full processor)
+ * Directories we refuse to walk into during a normal render. Expanding one in
+ * the UI re-requests it explicitly, which is the lazy-load path.
  */
-function isSystemIgnored(name: string): boolean {
-    // UPDATED: Added check for Godot .import and .uid files
-    return SYSTEM_HIDDEN.includes(name) || name.startsWith('.') || name.endsWith('.import') || name.endsWith('.uid');
+const MASSIVE_DIRS = new Set([
+    'node_modules', 'bower_components', 'vendor', '.git', '.svn', '.hg',
+    '.godot', '.svelte-kit', '.next', '.nuxt', '.output', '.venv', 'venv',
+    'dist', 'build', 'out', 'target', 'CMakeFiles', '.gradle'
+]);
+
+const MAX_FOLDER_ITEMS = 250;
+
+/** Syncthing's own folder marker. Ignoring it would break the folder. */
+const NEVER_TOUCH = new Set(['.stfolder', '.stignore', '.stversions']);
+
+export function isJunkName(name: string): boolean {
+    return JUNK_DIRS.has(name) || name.endsWith('.egg-info');
+}
+
+function toRel(rootDir: string, fullPath: string): string {
+    return path.relative(rootDir, fullPath).split(path.sep).join('/');
 }
 
 export async function scanDirectory(
     rootDir: string,
     currentDir: string,
-    depth: number = 0,
-    additionalIgnores: string[] = [],
-    isLazyLoadRoot: boolean = false // <--- NEW PARAMETER
+    rules: Rule[],
+    depth = 0,
+    /** True when the caller asked for this exact folder, so walk it even if it is huge. */
+    isLazyLoadRoot = false
 ): Promise<TreeNode[]> {
-    logDebug(`Scanning directory: ${currentDir} (Depth: ${depth})`);
+    logDebug(`Scanning ${currentDir} (depth ${depth})`);
 
-    const nodes: TreeNode[] = [];
     let entries: import('fs').Dirent[] = [];
     try {
         entries = await fs.readdir(currentDir, { withFileTypes: true });
-    } catch (e) {
+    } catch {
         return [];
     }
 
-    // --- MASSIVE FOLDER CHECK (Optimized) ---
-
-    // If this folder has too many items, we mark it massive and STOP here.
-
-    // EXCEPTION: If this is the specific folder the user requested to expand (isLazyLoadRoot),
-
-    // we MUST process its immediate children, otherwise the UI shows nothing.
-
-    const isTooManyItems = entries.length > MAX_FOLDER_ITEMS;
-
-    const dirName = path.basename(currentDir);
-
-    const isKnownMassive = MASSIVE_FOLDERS.has(dirName);
-
-    // If we are deep in recursion OR (it is massive AND NOT the root of this specific scan request)
-
-    if (depth > 0 && (isKnownMassive || isTooManyItems) && !isLazyLoadRoot) {
-
-        return []; // Returning empty triggers the "Massive" state in the parent node logic
-
+    const tooManyItems = entries.length > MAX_FOLDER_ITEMS;
+    const knownMassive = MASSIVE_DIRS.has(path.basename(currentDir));
+    if (depth > 0 && (knownMassive || tooManyItems) && !isLazyLoadRoot) {
+        return [];
     }
 
-    // -------------------------------------------
-
-    // Merge passed ignores with local .gitignore...
-    const activeIgnores = [...additionalIgnores];
-    const gitIgnorePath = path.join(currentDir, '.gitignore');
-    try {
-        const gitIgnoreContent = await fs.readFile(gitIgnorePath, 'utf-8');
-        gitIgnoreContent.split('\n').forEach(line => {
-            const l = line.trim();
-            if (l && !l.startsWith('#')) activeIgnores.push(l);
-        });
-    } catch (e) { }
-
-    // Sort: Folders first, then files
     entries.sort((a, b) => {
-        if (a.isDirectory() && !b.isDirectory()) return -1;
-        if (!a.isDirectory() && b.isDirectory()) return 1;
+        if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1;
         return a.name.localeCompare(b.name);
     });
 
+    const nodes: TreeNode[] = [];
+
     for (const entry of entries) {
         const fullPath = path.join(currentDir, entry.name);
-        const relPath = path.relative(rootDir, fullPath);
-        const normalizedRelPath = relPath.split(path.sep).join('/');
+        const relPath = toRel(rootDir, fullPath);
         const isDirectory = entry.isDirectory();
 
-        // Check simple ignore logic (System files)...
-        let isIgnored = isSystemIgnored(entry.name);
-        if (!isIgnored) {
-            isIgnored = activeIgnores.some(pattern => {
-                // ... existing regex logic ...
-                let p = pattern.trim();
-                if (!p || p.startsWith('#')) return false;
-                if (p.startsWith('!')) return false;
-                p = p.replace(/\\/g, '/');
-                const isDirPattern = p.endsWith('/');
-                if (isDirPattern) {
-                    p = p.slice(0, -1);
-                    if (!isDirectory) return false;
-                }
-                if (p.startsWith('*')) return entry.name.endsWith(p.slice(1));
-                if (p.startsWith('/')) {
-                    const clean = p.slice(1);
-                    return normalizedRelPath === clean || normalizedRelPath.startsWith(clean + '/');
-                }
-                if (!p.includes('/')) return entry.name === p;
-                return normalizedRelPath === p || normalizedRelPath.startsWith(p + '/');
-            });
-        }
+        // Shown but not selectable, so "where did my .stignore go" never comes up.
+        const neverSynced = depth === 0 && NEVER_TOUCH.has(entry.name);
 
-        // --- MASSIVE & MEDIA CHECKS ---
-
-        const ext = path.extname(entry.name).toLowerCase();
-        const isMedia = !isDirectory && MEDIA_EXTENSIONS.has(ext);
+        const hit = matchRule(relPath, rules);
+        const isNegated = !!hit?.negate;
+        const isIgnored = hit ? !hit.negate : false;
 
         let isMassive = false;
-        let children: TreeNode[] | undefined = undefined;
-        if (isDirectory) {
-            // Check if THIS specific child folder is known massive (e.g. node_modules)
-            // If so, we mark it massive and DO NOT recurse.
-            if (MASSIVE_FOLDERS.has(entry.name)) {
+        let children: TreeNode[] | undefined;
+
+        if (isDirectory && !neverSynced) {
+            if (MASSIVE_DIRS.has(entry.name)) {
                 isMassive = true;
-                children = []; // Empty children = Massive/Lazy Load
+                children = [];
             } else {
-                // Recurse normally
-                // Pass false for isLazyLoadRoot because children of the lazy load root are not exempt
-                children = await scanDirectory(rootDir, fullPath, depth + 1, activeIgnores, false);
+                children = await scanDirectory(rootDir, fullPath, rules, depth + 1, false);
             }
-        } else {
-            // Check File Size
-            try {
-                const stats = await fs.stat(fullPath);
-                if (stats.size > MAX_FILE_SIZE_MB) isMassive = true;
-            } catch (e) { }
         }
 
-        // ------------------------------
-
-        // --- CHANGE START ---
-        // Ensure the ID/Path sent to frontend is always forward-slash normalized
-        // This prevents "src\lib" vs "src/lib" mismatches in selection rules
-        const normalizedPath = relPath.replace(/\\/g, '/');
-
-        const node: TreeNode = {
+        nodes.push({
             name: entry.name,
-            path: normalizedPath, // <--- CHANGED from 'relPath' to 'normalizedPath'
+            path: relPath,
             type: isDirectory ? 'folder' : 'file',
-            isIgnored: isIgnored,
-            isMedia: isMedia,
-            isMassive: isMassive, // <--- NEW
-            children: children,
-            depth: depth
-        };
-        // --- CHANGE END ---
-
-        nodes.push(node);
+            children,
+            depth,
+            isIgnored,
+            decidedBy: hit ? hit.raw.trim() : null,
+            isNegated,
+            isManaged: !!hit?.managed,
+            isJunk: isDirectory && !neverSynced && isJunkName(entry.name),
+            isMassive,
+            neverSynced
+        });
     }
 
     return nodes;
 }
 
+export interface JunkHit {
+    /** Path relative to the folder root. */
+    path: string;
+    /** Directory name, which is also what put it on the list. */
+    name: string;
+    /** How many path segments deep it sits. A root-level hit is 1. */
+    depth: number;
+    /** Already covered by the current .stignore. */
+    alreadyIgnored: boolean;
+}
+
 /**
- * Generates a visual tree string for the Source-Tree.txt file
+ * Walk the folder looking for junk directories.
+ *
+ * `maxDepth` counts path segments, so 1 finds only root-level hits like
+ * `./node_modules`, 2 also finds `packages/web/../node_modules` one level in,
+ * and so on. The walk stops descending once it finds a hit, because
+ * node_modules inside node_modules is not a separate decision.
  */
-export function generateTreeString(
-    nodes: TreeNode[],
-    // selectedPaths determines VISIBILITY in the tree (structure)
-    selectedPaths: Set<string>,
-    // includedContentPaths determines the STATUS MARKER (✓/✕)
-    includedContentPaths: Set<string>,
-    prefix = ''
-): string {
-    let output = '';
+export async function findJunk(
+    rootDir: string,
+    maxDepth: number,
+    rules: Rule[]
+): Promise<JunkHit[]> {
+    const hits: JunkHit[] = [];
 
-    // Filter nodes that are effectively visible in the tree map
-    const validNodes = nodes.filter(n => selectedPaths.has(n.path));
+    async function walk(dir: string, depth: number) {
+        if (depth > maxDepth) return;
 
-    for (let i = 0; i < validNodes.length; i++) {
-        const node = validNodes[i];
-        const isLast = i === validNodes.length - 1;
-        const connector = isLast ? '└── ' : '├── ';
-        const childPrefix = isLast ? '    ' : '│   ';
-
-        // Determine suffix
-        let suffix = '';
-        if (node.type === 'file') {
-            // Check if this specific file ended up in the processed list
-            if (includedContentPaths.has(node.path)) {
-                suffix = '  [✓]'; // Included in merged text
-            } else {
-                suffix = '  [-]'; // Excluded (Binary, huge, or rule excluded)
-            }
+        let entries: import('fs').Dirent[] = [];
+        try {
+            entries = await fs.readdir(dir, { withFileTypes: true });
+        } catch {
+            return;
         }
 
-        output += prefix + connector + node.name + (node.type === 'folder' ? '/' : '') + suffix + '\n';
+        for (const entry of entries) {
+            if (!entry.isDirectory()) continue;
+            if (NEVER_TOUCH.has(entry.name)) continue;
 
-        if (node.children && node.children.length > 0) {
-            output += generateTreeString(node.children, selectedPaths, includedContentPaths, prefix + childPrefix);
+            const fullPath = path.join(dir, entry.name);
+            const relPath = toRel(rootDir, fullPath);
+
+            if (isJunkName(entry.name)) {
+                const hit = matchRule(relPath, rules);
+                hits.push({
+                    path: relPath,
+                    name: entry.name,
+                    depth,
+                    alreadyIgnored: hit ? !hit.negate : false
+                });
+                // Do not descend. Junk inside junk is the same decision.
+                continue;
+            }
+
+            await walk(fullPath, depth + 1);
         }
     }
-    return output;
+
+    await walk(rootDir, 1);
+    hits.sort((a, b) => a.path.localeCompare(b.path));
+    return hits;
 }

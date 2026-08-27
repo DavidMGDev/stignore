@@ -1,9 +1,10 @@
 import { json } from '@sveltejs/kit';
-import { updateHeartbeat } from '$lib/server/session';
 
+/**
+ * The page polls this only to notice the server going away. Nothing here
+ * shuts anything down: the watchdog that used to kill the process when the
+ * browser stopped pinging is gone on purpose.
+ */
 export function GET() {
-    // Update the session monitor whenever the frontend pings
-    updateHeartbeat();
-    return json({ status: 'ok' });
+    return json({ ok: true });
 }
-

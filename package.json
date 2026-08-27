@@ -1,10 +1,10 @@
 {
-  "name": "txt-forge",
-  "version": "1.4.11",
-  "description": "Turn any code folder into AI-ready text files instantly.",
+  "name": "stignore",
+  "version": "1.0.0",
+  "description": "Manage a Syncthing .stignore file from a local browser UI.",
   "type": "module",
   "bin": {
-    "txt-forge": "./bin/cli.js"
+    "stignore": "./bin/cli.js"
   },
   "files": [
     "build",
@@ -15,23 +15,22 @@
     "dev": "vite dev",
     "build": "vite build",
     "preview": "vite preview",
+    "test": "node src/lib/stignore.test.ts",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
-    "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
-    "ai",
-    "llm",
-    "gpt",
-    "context",
-    "codebase",
-    "converter"
+    "syncthing",
+    "stignore",
+    "ignore",
+    "sync",
+    "cli"
   ],
   "author": "DavidMGDev",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/DavidMGDev/txt-forge.git"
+    "url": "https://github.com/DavidMGDev/stignore.git"
   },
   "devDependencies": {
     "@sveltejs/adapter-node": "^5.4.0",
@@ -47,7 +46,6 @@
     "vite": "^7.2.4"
   },
   "dependencies": {
-    "@chenglou/pretext": "^0.0.4",
     "open": "^10.0.0",
     "polka": "^0.5.2",
     "sirv": "^2.0.0"

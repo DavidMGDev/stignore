@@ -1,280 +1,204 @@
 <script lang="ts">
-    import { slide } from "svelte/transition";
+    import { slide } from 'svelte/transition';
+    import Self from './FileTreeNode.svelte';
 
-    export let node: any;
-    export let selectedPaths: Set<string>;
-    export let folderDescendants: Map<string, string[]>;
-    // Updated signature: removed forcedState
-    export let onToggle: (path: string, isFolder: boolean) => void;
-    export let onLoadChildren: (path: string) => Promise<void>;
+    let {
+        node,
+        selectedPaths,
+        folderDescendants,
+        onToggle,
+        onLoadChildren,
+        onRemove
+    }: {
+        node: any;
+        selectedPaths: Set<string>;
+        folderDescendants: Map<string, string[]>;
+        onToggle: (path: string, isFolder: boolean) => void;
+        onLoadChildren: (path: string) => Promise<void>;
+        onRemove: (path: string) => void;
+    } = $props();
 
-    let expanded = false;
-    let isLoading = false;
+    let expanded = $state(false);
+    let loading = $state(false);
 
-    $: isSelfChecked = selectedPaths.has(node.path);
+    const isFolder = $derived(node.type === 'folder');
+    const selfChecked = $derived(selectedPaths.has(node.path));
 
-    let isIndeterminate = false;
-    let isFullyChecked = false;
-    // New state: Detect if we have forced ignored files to be checked
-    let isForceChecked = false;
+    // The checkbox means "queued for the next action", not "ignored". That
+    // separation is what lets one column of checkboxes drive both the ignore
+    // button and the un-ignore button.
+    const descendants = $derived(folderDescendants.get(node.path) || []);
+    const selectedCount = $derived(
+        descendants.reduce((n, p) => n + (selectedPaths.has(p) ? 1 : 0), 0)
+    );
+    const fullyChecked = $derived(
+        isFolder && descendants.length
+            ? selfChecked && selectedCount === descendants.length
+            : selfChecked
+    );
+    const indeterminate = $derived(
+        isFolder && !fullyChecked && (selfChecked || selectedCount > 0)
+    );
 
-    // FIX: Determine if the node has ANY selectable content (Files or Massive state)
-    // If allDescendants is empty AND it is not Massive, it effectively contains only media (or is truly empty).
-    $: hasContent = node.type === 'file' || node.isMassive || (folderDescendants.get(node.path)?.length || 0) > 0;
+    const hasChildren = $derived(node.children && node.children.length > 0);
 
-    $: {
-        if (node.type === "folder") {
-            const allDescendants = folderDescendants.get(node.path) || [];
-
-            if (node.isMassive && allDescendants.length === 0) {
-                // Massive folders not yet loaded are binary: either we forced them, or we didn't.
-                isFullyChecked = isSelfChecked;
-                isIndeterminate = false;
-            } else if (allDescendants.length > 0) {
-                const selectedCount = allDescendants.reduce(
-                    (acc, path) => acc + (selectedPaths.has(path) ? 1 : 0),
-                    0,
-                );
-
-                isFullyChecked = selectedCount === allDescendants.length;
-                isIndeterminate = selectedCount > 0 && !isFullyChecked;
-            } else {
-                // Folder has no text files (likely only media). 
-                // It should NEVER look selected.
-                isFullyChecked = false;
-                isIndeterminate = false;
-            }
-        } else {
-            isFullyChecked = isSelfChecked;
-        }
-    }
-
-    $: hasChildren = node.children && node.children.length > 0;
-    $: isExpandable = node.type === "folder";
+    // Only rules this tool wrote can be removed from a row. A hand-written
+    // rule stays the user's to change, in their editor.
+    const removable = $derived(node.isIgnored && node.isManaged);
 
     async function handleExpand() {
-        if (!isExpandable) return;
-        if (
-            !expanded &&
-            node.isMassive &&
-            (!node.children || node.children.length === 0)
-        ) {
-            isLoading = true;
+        if (!isFolder) return;
+        if (!expanded && node.isMassive && !hasChildren) {
+            loading = true;
             expanded = true;
             await onLoadChildren(node.path);
-            isLoading = false;
-        } else {
-            expanded = !expanded;
+            loading = false;
+            return;
         }
-    }
-
-    function handleToggle() {
-        // We just notify parent. Parent calculates next state in the cycle.
-        onToggle(node.path, node.type === "folder");
+        expanded = !expanded;
     }
 </script>
 
 <div class="select-none">
     <div
-        class="flex items-center gap-2 py-1 px-2 rounded-lg hover:bg-white/5 group transition-colors border border-transparent hover:border-orange-500/20"
+        class="flex items-center gap-2 py-1 px-2 rounded-lg hover:bg-white/5 group transition-colors border border-transparent hover:border-cyan-500/20"
         style="padding-left: {node.depth * 1.25 + 0.5}rem"
     >
-        <!-- UPDATED Expander -->
         <button
             onclick={(e) => {
                 e.stopPropagation();
                 handleExpand();
             }}
+            aria-label={expanded ? 'Collapse' : 'Expand'}
             class="w-5 h-5 flex items-center justify-center rounded hover:bg-white/10 text-slate-500 transition-transform duration-200 {expanded
-                ? 'rotate-90 text-orange-400'
-                : ''} {isExpandable ? '' : 'invisible'}"
+                ? 'rotate-90 text-cyan-400'
+                : ''} {isFolder ? '' : 'invisible'}"
         >
-            {#if isLoading}
-                <!-- Tiny Spinner -->
-                <svg
-                    class="animate-spin h-3 w-3 text-orange-500"
-                    xmlns="http://www.w3.org/2000/svg"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    ><circle
-                        class="opacity-25"
-                        cx="12"
-                        cy="12"
-                        r="10"
-                        stroke="currentColor"
-                        stroke-width="4"
-                    ></circle><path
-                        class="opacity-75"
-                        fill="currentColor"
-                        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                    ></path></svg
-                >
+            {#if loading}
+                <svg class="animate-spin h-3 w-3 text-cyan-400" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                </svg>
             {:else}
                 ▶
             {/if}
         </button>
 
-        <!-- Checkbox -->
         <button
             onclick={(e) => {
                 e.stopPropagation();
-                if (hasContent && !node.isMedia) handleToggle();
+                if (!node.neverSynced) onToggle(node.path, isFolder);
             }}
-            disabled={node.isMedia || !hasContent}
-            title={!hasContent 
-                ? "No text files in folder"
-                : node.isMedia
-                    ? "Media files excluded"
-                    : isFullyChecked
-                        ? "Click to Deselect All"
-                        : isIndeterminate
-                            ? "Click to Force Select All (including ignored)"
-                            : "Click to Smart Select"}
-            class="w-4 h-4 rounded border flex items-center justify-center transition-all duration-200 group/cb relative
-            {!hasContent || node.isMedia
+            disabled={node.neverSynced}
+            title={node.neverSynced
+                ? 'Syncthing handles this name itself. A rule for it would do nothing.'
+                : fullyChecked
+                  ? 'Deselect'
+                  : 'Select'}
+            aria-label="Select {node.name}"
+            class="w-4 h-4 rounded border flex items-center justify-center transition-all duration-200 shrink-0
+            {node.neverSynced
                 ? 'bg-slate-800 border-slate-800 opacity-20 cursor-not-allowed'
-                : isFullyChecked
-                  ? 'bg-orange-500 border-orange-500 text-white shadow-[0_0_8px_rgba(249,115,22,0.4)] hover:bg-red-500 hover:border-red-500 hover:shadow-red-500/20'
-                  : isIndeterminate
-                    ? 'bg-slate-900 border-orange-500 text-orange-500 shadow-[0_0_5px_rgba(249,115,22,0.2)] hover:bg-orange-500 hover:text-white hover:shadow-orange-500/30'
-                    : 'border-slate-700 bg-slate-900/50 hover:border-orange-500 hover:bg-orange-500/20'}"
+                : fullyChecked
+                  ? 'bg-cyan-500 border-cyan-500 text-slate-950 shadow-[0_0_8px_rgba(34,211,238,0.4)]'
+                  : indeterminate
+                    ? 'bg-slate-900 border-cyan-500 shadow-[0_0_5px_rgba(34,211,238,0.2)]'
+                    : 'border-slate-700 bg-slate-900/50 hover:border-cyan-500 hover:bg-cyan-500/20'}"
         >
-            {#if isFullyChecked}
-                <!-- Checkmark -->
-                <svg
-                    class="w-3 h-3 transition-transform duration-200 group-hover/cb:scale-75"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                    ><path
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        stroke-width="3"
-                        d="M5 13l4 4L19 7"
-                    ></path></svg
-                >
-                <!-- X icon on hover (Red Background) -->
-                <svg
-                    class="w-3 h-3 absolute inset-0 m-auto opacity-0 group-hover/cb:opacity-100 transition-opacity"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                    ><path
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        stroke-width="3"
-                        d="M6 18L18 6M6 6l12 12"
-                    ></path></svg
-                >
-            {:else if isIndeterminate}
-                <!-- Dash (Orange) -->
-                <div
-                    class="w-2.5 h-0.5 bg-orange-500 rounded-full shadow-sm group-hover/cb:opacity-0 transition-opacity"
-                ></div>
-                <!-- Checkmark on hover (Filling the box Orange) -->
-                <svg
-                    class="w-3 h-3 absolute inset-0 m-auto opacity-0 group-hover/cb:opacity-100 transition-opacity"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                    ><path
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        stroke-width="3"
-                        d="M5 13l4 4L19 7"
-                    ></path></svg
-                >
+            {#if fullyChecked}
+                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path>
+                </svg>
+            {:else if indeterminate}
+                <div class="w-2.5 h-0.5 bg-cyan-400 rounded-full"></div>
             {/if}
         </button>
 
-        <!-- Name -->
-
         <div
-            class="flex items-center gap-2 text-sm font-mono truncate cursor-pointer flex-1"
+            class="flex items-center gap-2 text-sm font-mono truncate cursor-pointer flex-1 min-w-0"
             role="button"
             tabindex="0"
             onclick={handleExpand}
             onkeydown={(e) => {
-                if (e.key === "Enter" || e.key === " ") handleExpand();
+                if (e.key === 'Enter' || e.key === ' ') handleExpand();
             }}
         >
-            {#if node.type === "folder"}
-                <span class="text-amber-500 opacity-90 drop-shadow-md">📁</span>
+            <span class="shrink-0 {node.isIgnored ? 'opacity-40' : 'opacity-90'}">
+                {isFolder ? '📁' : '📄'}
+            </span>
 
-                <span
-                    class="{isFullyChecked || isIndeterminate
-                        ? 'text-orange-100'
-                        : 'text-slate-500'} group-hover:text-orange-50 transition-colors"
-                    >{node.name}</span
-                >
-
-                <!-- NEW: Massive Label -->
-
-                {#if node.isMassive}
-                    <span
-                        class="ml-2 text-[9px] uppercase border border-amber-900/50 text-amber-500/80 px-1.5 rounded bg-amber-950/30 tracking-wider"
-                        >Massive</span
-                    >
-                {/if}
-            {:else}
-                <span
-                    class="opacity-80 {node.isMedia
-                        ? 'grayscale opacity-50'
-                        : 'text-orange-400/80'}"
-                >
-                    {node.isMedia ? "🖼️" : "📄"}
-                </span>
-
-                <span
-                    class="{isFullyChecked
-                        ? 'text-orange-200/80'
-                        : 'text-slate-500'} group-hover:text-white transition-colors {node.isMedia &&
-                    !isFullyChecked
-                        ? 'italic opacity-50'
-                        : ''}"
-                >
-                    {node.name}
-                </span>
-            {/if}
+            <span
+                class="truncate {node.isIgnored
+                    ? 'text-slate-600 line-through decoration-slate-700'
+                    : selfChecked
+                      ? 'text-cyan-100'
+                      : 'text-slate-400'} group-hover:text-cyan-50 transition-colors"
+            >
+                {node.name}
+            </span>
 
             {#if node.isIgnored}
-                <!-- If it's ignored but checked, show a different style to warn user -->
-                {#if isFullyChecked || isSelfChecked}
-                    <span
-                        class="ml-2 text-[9px] uppercase border border-orange-900/50 text-orange-400/80 px-1.5 rounded bg-orange-950/30"
-                        >Force Included</span
-                    >
-                {:else}
-                    <span
-                        class="ml-2 text-[9px] uppercase border border-slate-800 text-slate-600 px-1.5 rounded bg-slate-950"
-                        >Ignored</span
-                    >
-                {/if}
+                <span
+                    title="{node.isManaged ? 'Managed rule' : 'Your rule'}: {node.decidedBy}"
+                    class="ml-1 shrink-0 text-[9px] uppercase px-1.5 rounded tracking-wider border
+                    {node.isManaged
+                        ? 'border-amber-900/50 text-amber-400/80 bg-amber-950/30'
+                        : 'border-slate-700 text-slate-500 bg-slate-900'}"
+                >
+                    Ignored{node.isManaged ? '' : ' (yours)'}
+                </span>
+            {:else if node.isNegated}
+                <span
+                    title="Kept by your rule: {node.decidedBy}"
+                    class="ml-1 shrink-0 text-[9px] uppercase border border-emerald-900/50 text-emerald-400/80 px-1.5 rounded bg-emerald-950/30 tracking-wider"
+                >
+                    Kept
+                </span>
+            {:else if node.isJunk}
+                <span
+                    title="Auto-detect would pick this up"
+                    class="ml-1 shrink-0 text-[9px] uppercase border border-cyan-900/50 text-cyan-400/70 px-1.5 rounded bg-cyan-950/30 tracking-wider"
+                >
+                    Detected
+                </span>
             {/if}
 
-            {#if node.isMedia && !isFullyChecked}
+            {#if node.isMassive}
                 <span
-                    class="ml-2 text-[9px] uppercase border border-slate-800 text-slate-700 px-1.5 rounded bg-slate-950"
-                    >Media</span
+                    title="Not scanned yet. Click to expand."
+                    class="ml-1 shrink-0 text-[9px] uppercase border border-slate-700 text-slate-500 px-1.5 rounded bg-slate-900/60 tracking-wider"
                 >
+                    Unscanned
+                </span>
             {/if}
         </div>
+
+        {#if removable}
+            <button
+                onclick={(e) => {
+                    e.stopPropagation();
+                    onRemove(node.path);
+                }}
+                title="Remove this rule from .stignore"
+                aria-label="Stop ignoring {node.name}"
+                class="shrink-0 w-5 h-5 rounded flex items-center justify-center text-slate-600 hover:text-rose-400 hover:bg-rose-500/10 opacity-0 group-hover:opacity-100 transition-all text-xs"
+            >
+                ✕
+            </button>
+        {/if}
     </div>
-
-    <!-- Children -->
-
-    <!-- Check hasChildren OR isMassive (to keep div ready for injection) -->
 
     {#if expanded && (hasChildren || node.isMassive)}
         <div transition:slide|local={{ duration: 200 }}>
             {#if node.children}
                 {#each node.children as child (child.path)}
-                    <svelte:self
+                    <Self
                         node={child}
                         {selectedPaths}
                         {folderDescendants}
                         {onToggle}
                         {onLoadChildren}
+                        {onRemove}
                     />
                 {/each}
             {/if}

@@ -1,17 +1,21 @@
-# Ignore source files
+# Source; the published package ships the build output only
 src/
 static/
 .svelte-kit/
 node_modules/
 
-# Config files not needed at runtime
+# Config needed only to build
 vite.config.ts
 tailwind.config.js
 tsconfig.json
 postcss.config.js
-test-detection.js
+svelte.config.js
 
-# Ignore system files
+# Docs live on GitHub
+PRD.md
+docs/
+
+# System
 .DS_Store
 Thumbs.db
 .env

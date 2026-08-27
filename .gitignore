@@ -38,8 +38,8 @@ Thumbs.db
 
 
 
-# TXT-Forge specific
+# stignore output
 
-TXT-Forge/
 
-.txt-forge-vault/
+# Backup written by the tool when run inside this repo
+.stignore.bak

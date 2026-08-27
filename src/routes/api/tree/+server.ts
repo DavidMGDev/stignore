@@ -1,42 +1,35 @@
 import { json } from '@sveltejs/kit';
-import { scanDirectory } from '$lib/tree';
-import { templates } from '$lib/templates';
 import path from 'path';
+import { scanDirectory } from '$lib/tree';
 import { getCwd } from '$lib/server/sys-utils';
+import { readStignore, isSafeRelPath } from '$lib/server/stignore-file';
 
 export async function GET({ url }) {
     const cwd = getCwd();
-
-    // NEW: Lazy Load support
     const subPath = url.searchParams.get('path') || '';
-    const scanRoot = path.join(cwd, subPath);
 
-    // FIX: Calculate depth based on path segments so indentation aligns correctly
+    if (subPath && !isSafeRelPath(subPath)) {
+        return json({ tree: [], error: 'Path outside the folder' }, { status: 400 });
+    }
 
-    // If subPath is "node_modules" (1 segment), items inside are at depth 1.
+    // Re-read on every request so the tree reflects the file as it is now,
+    // including edits made in another editor while this page was open.
+    const state = await readStignore();
 
-    // If subPath is empty (root), items are at depth 0.
+    const scanRoot = subPath ? path.join(cwd, subPath) : cwd;
+    const startDepth = subPath ? subPath.split('/').length : 0;
 
-    const startDepth = subPath ? subPath.split(/[/\\]/).length : 0;
-
-    // Get selected template IDs
-    const templateIds = url.searchParams.get('templates')?.split(',') || [];
-    const templateIgnores: string[] = [];
-    templateIds.forEach(id => {
-        const t = templates.find(tmpl => tmpl.id === id);
-        if (t) {
-            t.ignores.forEach(ign => templateIgnores.push(ign));
-        }
-    });
     try {
-        // We pass the ROOT (cwd) as the first arg so relative paths remain correct (e.g. src/lib/...)
-        // We pass the ACTUAL folder to scan as second arg
-        // We pass 'true' as the 5th argument if 'subPath' exists, meaning this is a specific lazy load request
-        const isLazyRequest = !!subPath;
-        const tree = await scanDirectory(cwd, scanRoot, startDepth, templateIgnores, isLazyRequest);
+        const tree = await scanDirectory(
+            cwd,
+            scanRoot,
+            state.parsed.rules,
+            startDepth,
+            !!subPath
+        );
         return json({ tree });
     } catch (e) {
         console.error(e);
-        return json({ tree: [] }, { status: 500 });
+        return json({ tree: [], error: 'Scan failed' }, { status: 500 });
     }
 }

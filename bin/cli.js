@@ -7,180 +7,104 @@ import open from 'open';
 import { randomUUID } from 'crypto';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-// Adjust path to point to the built server
 const serverPath = path.join(__dirname, '../build/index.js');
 
 const USER_CWD = process.cwd();
-const PORT = 4567; // Standard Port
+const PORT = 4568;
 const SESSION_ID = randomUUID();
 
-// --- Argument Parsing ---
 const args = process.argv.slice(2);
 const isDebug = args.includes('--debug') || args.includes('-d');
-const isAuto = args.includes('--auto') || args.includes('-a');
 
-// Flags are ONLY active if Auto Mode is enabled
-const isVault = isAuto && (args.includes('--vault') || args.includes('--global') || args.includes('-v'));
-const isHidden = isAuto && (args.includes('--ignore') || args.includes('-i'));
-const isSingleFile = isAuto && (args.includes('--single') || args.includes('-s'));
+if (args.includes('--help') || args.includes('-h')) {
+    console.log(`
+  stignore - manage a Syncthing .stignore file from your browser
 
-// Custom Path Parsing (Allowed in both modes)
-let customPath = null;
-const customFlagIndex = args.indexOf('--custom') > -1 ? args.indexOf('--custom') : args.indexOf('-c');
-if (customFlagIndex > -1 && args[customFlagIndex + 1]) {
-    customPath = args[customFlagIndex + 1];
-    customPath = customPath.replace(/^"|"$/g, '').replace(/^'|'$/g, '');
+  Usage:
+    stignore [options]
+
+  Runs against the current directory. Opens a local UI on port ${PORT}
+  and stays up until you press Exit in the UI or Ctrl+C here.
+
+  Options:
+    -d, --debug    Print server logs to this terminal
+    -h, --help     Show this
+`);
+    process.exit(0);
 }
 
-// --------------------------------
+console.log('\x1b[36m%s\x1b[0m', '› Starting stignore...');
+console.log('\x1b[90m%s\x1b[0m', `  Folder: ${USER_CWD}`);
+if (isDebug) console.log('\x1b[33m%s\x1b[0m', '› Debug mode enabled');
 
-if (!isAuto) {
-    console.log('\x1b[36m%s\x1b[0m', '› Initializing TXT-Forge...');
-    // In UI mode, flags are ignored, so we don't log them.
-} else {
-    console.log('\x1b[36m%s\x1b[0m', '› TXT-Forge Auto-Mode Initiated...');
-    // Removed [Ignored: VISIBLE] as requested. Only showing active overrides.
-    const activeOptions = [];
-    if (isVault) activeOptions.push('Vault Save');
-    if (isHidden) activeOptions.push('Hide Ignored');
-    if (isSingleFile) activeOptions.push('Single File');
-
-    if (activeOptions.length > 0) {
-        console.log('\x1b[90m%s\x1b[0m', `  Overrides: [${activeOptions.join(', ')}]`);
-    }
-}
-
-if (isDebug) console.log('\x1b[33m%s\x1b[0m', '› Debug Mode Enabled');
-
+/** Clear a stale server left behind by a previous run. */
 async function killPort(port) {
     return new Promise((resolve) => {
         const isWin = process.platform === 'win32';
-        // FIX: On Windows, strictly filter for 'LISTENING' to avoid killing the browser (ESTABLISHED connections)
+        // On Windows, filter to LISTENING so we never kill an ESTABLISHED browser connection.
         const command = isWin
             ? `netstat -ano | findstr :${port} | findstr LISTENING`
             : `lsof -i :${port} -t`;
 
         exec(command, (err, stdout) => {
             if (!stdout) return resolve();
-            console.log('\x1b[90m%s\x1b[0m', '› Preparing local network environment...');
+            console.log('\x1b[90m%s\x1b[0m', '› Clearing previous session...');
 
-            if (isWin) {
-                const lines = stdout.trim().split('\n');
-                // It's possible multiple lines exist, kill the PID found in the first valid listener
-                const pid = lines[0].trim().split(/\s+/).pop();
-                if (pid && pid !== '0') {
-                    exec(`taskkill /PID ${pid} /F`, () => setTimeout(resolve, 500)); // Increased buffer to 500ms
-                } else {
-                    resolve();
-                }
+            const pid = isWin
+                ? stdout.trim().split('\n')[0].trim().split(/\s+/).pop()
+                : stdout.trim().split('\n')[0].trim();
+
+            if (pid && pid !== '0') {
+                exec(isWin ? `taskkill /PID ${pid} /F` : `kill -9 ${pid}`, () =>
+                    setTimeout(resolve, 500)
+                );
             } else {
-                const pid = stdout.trim();
-                if (pid) {
-                    exec(`kill -9 ${pid}`, () => setTimeout(resolve, 500)); // Increased buffer to 500ms
-                } else {
-                    resolve();
-                }
+                resolve();
             }
         });
     });
 }
 
-async function startServer() {
+async function start() {
     await killPort(PORT);
-
-    // In auto mode, we pipe stdout to 'ignore' unless debug
-    const stdioConfig = (isAuto && !isDebug) ? ['ignore', 'ignore', 'inherit'] : 'inherit';
 
     const server = spawn('node', [serverPath], {
         env: {
             ...process.env,
             PORT: PORT.toString(),
-            TXT_FORGE_CWD: USER_CWD,
+            STIGNORE_CWD: USER_CWD,
             ORIGIN: `http://localhost:${PORT}`,
-            FORGE_SESSION_ID: SESSION_ID,
-            node_env: 'production',
-            TXT_FORGE_DEBUG: isDebug ? 'true' : 'false'
-            // REMOVED TXT_FORGE_SINGLE from env. 
-            // We now pass strict control flags via the API body for auto mode.
-            // UI mode ignores them completely.
+            STIGNORE_SESSION_ID: SESSION_ID,
+            NODE_ENV: 'production',
+            STIGNORE_DEBUG: isDebug ? 'true' : 'false'
         },
-        stdio: stdioConfig
+        stdio: 'inherit'
     });
 
-    // FIX: Detect if server crashes immediately (e.g., EADDRINUSE)
     let serverExited = false;
     server.on('exit', (code) => {
         serverExited = true;
         if (code !== 0 && code !== null) {
-            console.error('\x1b[31m%s\x1b[0m', `✕ Server failed to start (Exit Code: ${code}). Port might be locked.`);
+            console.error(
+                '\x1b[31m%s\x1b[0m',
+                `✕ Server failed to start (exit ${code}). Port ${PORT} may be locked.`
+            );
             process.exit(code);
         }
+        process.exit(0);
     });
 
-    const url = `http://localhost:${PORT}`;
-
-    // Wait for server to start
     setTimeout(async () => {
-        // FIX: Don't open browser if server died
         if (serverExited) return;
-
-        if (isAuto) {
-            // --- AUTO MODE LOGIC ---
-            try {
-                console.log('\x1b[90m%s\x1b[0m', '› Detecting stack and processing files...');
-                const response = await fetch(`${url}/api/cli-forge`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        saveToVault: isVault,
-                        hideIgnoredInTree: isHidden,
-                        isSingleFile: isSingleFile, // Pass the flag here
-                        customPath: customPath
-                    })
-                });
-                const result = await response.json();
-                if (result.success) {
-                    console.log('\x1b[32m%s\x1b[0m', '✓ Auto-Forge Complete!');
-                    if (result.gitIgnoreModified) {
-                        console.log('\x1b[33m%s\x1b[0m', '⚠ Note: Added "TXT-Forge/" to your .gitignore file.');
-                    }
-                    if (result.configWasReset) {
-                        console.log('\x1b[33m%s\x1b[0m', '⚠ Warning: Project config reset due to version update.');
-                    }
-                    if (result.updateInfo && result.updateInfo.isUpdateAvailable) {
-                        console.log('\x1b[35m%s\x1b[0m', `➜ Update Available: ${result.updateInfo.latest} (Current: ${result.updateInfo.current})`);
-                        console.log('\x1b[90m%s\x1b[0m', '  Run "npm install -g txt-forge" to update.');
-                    }
-                    console.log('\x1b[90m%s\x1b[0m', `  Detected: ${result.detectedIds.join(', ') || 'None'}`);
-                    console.log('\x1b[36m%s\x1b[0m', `  Output:   ${result.outputPath}`);
-                    console.log('\x1b[90m%s\x1b[0m', `  Generated ${result.files.length} file(s).`);
-                    try {
-                        await open(result.outputPath);
-                    } catch (openErr) { }
-                } else {
-                    console.error('\x1b[31m%s\x1b[0m', '✕ Error:', result.message);
-                }
-            } catch (e) {
-                console.error('\x1b[31m%s\x1b[0m', '✕ Failed to communicate with internal server.');
-                if (isDebug) console.error(e);
-            } finally {
-                setTimeout(() => {
-                    server.kill();
-                    process.exit(0);
-                }, 500);
-            }
-        } else {
-            // --- UI MODE LOGIC ---
-            console.log('\x1b[32m%s\x1b[0m', `✓ Ready. Opening browser...`);
-            console.log('\x1b[90m%s\x1b[0m', '  (Press Ctrl+C to exit manually)');
-            await open(url);
-        }
-    }, 1500); // Cold start delay
+        console.log('\x1b[32m%s\x1b[0m', `✓ Ready at http://localhost:${PORT}`);
+        console.log('\x1b[90m%s\x1b[0m', '  Press Exit in the UI, or Ctrl+C here, to stop.');
+        await open(`http://localhost:${PORT}`);
+    }, 1500);
 
     process.on('SIGINT', () => {
         server.kill();
-        process.exit();
+        process.exit(0);
     });
 }
 
-startServer();
+start();

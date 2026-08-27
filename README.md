@@ -1,103 +1,89 @@
-# TXT-Forge ⚒️
+# stignore
 
-**Turn your codebase into AI-ready text context instantly.**
-
-TXT-Forge scans your project, detects your tech stack (TypeScript, Python, Rust, etc.), and merges your code into optimized text files. It handles `.gitignore` rules automatically and splits large files so they fit into ChatGPT, Claude, or Gemini context windows.
-
-![License](https://img.shields.io/npm/l/txt-forge)
-
-![Version](https://img.shields.io/npm/v/txt-forge)
-
-## 🚀 Quick Start
-
-You don't need to clone this repo. Just run it anywhere:
+Manage a Syncthing `.stignore` file from a browser UI, scoped to whatever folder you run it in.
 
 ```bash
-# Install globally
-npm install -g txt-forge
-
-# Run in any project folder
-txt-forge
+npm install -g stignore
+cd ~/my-synced-folder
+stignore
 ```
 
-This will launch a local GUI in your browser.
+That opens a page on `localhost:4568`. The top panel shows the state of that folder's
+`.stignore`. The bottom panel is a file tree marking what the file currently ignores. You tick
+folders, press a button, rules land in the file. Press Exit when you are done.
 
-## ✨ Features
+## What it does
 
-- **Auto-Detection**: Smartly identifies frameworks (React, SvelteKit, Django, Laravel, etc.).
-- **Visual Tree Selection**: Pick exactly which files or folders to include.
-- **Smart Splitting**: Files larger than your limit (e.g., 75k chars) are split at function boundaries, not randomly.
-- **Respects Git**: Automatically respects your .gitignore rules.
-- **Privacy First**: Runs 100% locally. Your code never leaves your machine.
+**Finds the junk for you.** `node_modules`, `.venv`, `__pycache__`, `dist`, `target` and about
+thirty other generated directories, down to a configurable depth. Depth 1 is direct children,
+depth 3 reaches `packages/<name>/node_modules` in a monorepo. Default 3.
 
-## 📦 Installation
+**Ignores what you tick.** Select anything in the tree and add it. Selecting a folder and its
+contents writes one rule, not two hundred.
 
-Ensure you have Node.js installed (v18 or higher recommended).
+**Takes rules back out.** From the tree, from the row, or from the managed rules list in the
+status panel. That last one is the only route that works once the folder is gone from disk.
+
+**Leaves your own rules alone.** Anything you hand-wrote is preserved byte for byte and never
+edited. The tool writes only inside a marked block at the end of the file.
+
+## Why the block goes at the end
+
+Syncthing takes the **first** matching pattern and ignores every later one. So a block at the
+top of the file would override rules you wrote by hand. Putting it at the end means your lines
+always win, and you override the tool just by writing above the block.
+
+The trade is that a rule the tool writes can land in the file and still do nothing, because
+something above it matched first. So after every write the tool re-reads the file and tells you
+which lines are shadowed and by what. A visible non-effect beats an invisible override.
+
+```
+// my own rules
+!/dist/keep.txt
+/secrets
+
+// stignore: managed block. Lines here are rewritten by the tool.
+(?d)/node_modules
+(?d)/packages/web/node_modules
+/src/generated
+// stignore: end of managed block.
+```
+
+`(?d)` appears only on directories whose name is on the junk list. It lets Syncthing delete the
+contents when they block removing an otherwise-empty parent, which is worth having for a
+`node_modules` and not worth having for a folder you picked by hand.
+
+The previous version of the file is kept as `.stignore.bak` after every write.
+
+## Options
+
+```
+stignore            Run against the current directory
+stignore --debug    Print server logs to this terminal
+stignore --help     Usage
+```
+
+## Development
 
 ```bash
-npm install -g txt-forge
+npm install
+npm test        # asserts the .stignore format against the Syncthing spec
+npm run dev
+npm run build
 ```
 
-## 🛠️ Usage
+`src/lib/stignore.ts` is the parser, matcher and writer, with no dependencies. It uses Node's
+built-in `path.matchesGlob`, which implements the glob grammar Syncthing documents.
+`src/lib/stignore.test.ts` is a plain file of asserts, no framework.
 
-### Interactive Mode (GUI)
+See [PRD.md](PRD.md) for the design and the reasoning behind it, and
+[docs/arena-synthesis.md](docs/arena-synthesis.md) for what was considered and rejected.
 
-Simply run the command in your project folder to launch the local web interface:
+## Prior art
 
-```bash
-txt-forge
-```
+Forked from [txt-forge](https://github.com/DavidMGDev/txt-forge), which supplied the CLI shell,
+the file tree, and the visual language. The text-merging half is gone.
 
-### Auto Mode (CLI Only)
+## License
 
-Skip the browser and instantly convert your project using auto-detection:
-
-```bash
-# Auto-detect and save to ./TXT-Forge/ folder
-txt-forge --auto
-# Short alias:
-txt-forge -a
-
-# Save to Global Vault instead (~/.txt-forge-vault)
-txt-forge -a --vault
-# Short alias:
-txt-forge -a -v
-
-# Save to a specific custom path
-txt-forge -a --custom "C:/Users/Dev/Desktop/MyContext"
-# Short alias:
-txt-forge -a -c "./my-output"
-
-# Include ignored files (like package-lock.json) in the Source Tree map
-# (Useful for giving AI context on dependencies without including the file content)
-txt-forge -a --ignore
-# Short alias:
-txt-forge -a -i
-
-# Single File Mode (Disable splitting into multiple files)
-txt-forge -a --single
-# Short alias:
-txt-forge -a -s
-
-# Combine flags (Auto + Vault + Single File)
-txt-forge -a -v -s
-```
-
-## 📄 Output Format
-
-TXT-Forge creates a folder (default: TXT-Forge/) containing:
-
-- **Source-Tree.txt**: A visual map of your project structure.
-- **Source-1.txt**: Your combined code files with clear headers.
-
-## 🤝 Contributing
-
-Issues and Pull Requests are welcome!
-
-1. Clone the repo
-2. Run `npm install`
-3. Run `npm run dev` to start the development server
-
-## 📝 License
-
-MIT © DavidMGDev
+MIT
