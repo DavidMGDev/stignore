@@ -19,16 +19,16 @@ Not on npm. Install it from a clone, on each machine you want it:
 git clone https://github.com/DavidMGDev/stignore.git
 cd stignore
 npm install
-npm run build
 npm link
 ```
 
-`npm link` puts `stignore` on your PATH pointing at the clone, so pulling and rebuilding updates
-the command in place. `npm unlink -g stignore` removes it.
+`npm install` builds the server as well, through the `prepare` script. `build/` is not committed,
+so that step has to happen once on every machine before the command works. If anything skips it,
+`stignore` says `stignore is not built yet` and names the command to run, and `npm run build`
+fixes it.
 
-Run `npm run build` explicitly even though `prepare` exists. npm 11 blocks lifecycle scripts by
-default, so the automatic build after `npm install` often does not fire, and you get a `stignore
-is not built yet` message instead.
+`npm link` puts `stignore` on your PATH pointing at the clone, so `git pull && npm run build`
+updates the command in place. `npm unlink -g stignore` removes it.
 
 **Node 22.5 or newer is required.** The pattern matcher uses `path.matchesGlob`, which does not
 exist in Node 20. Older versions fail at startup with a message saying so rather than crashing
