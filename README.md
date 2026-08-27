@@ -3,7 +3,6 @@
 Manage a Syncthing `.stignore` file from a browser UI, scoped to whatever folder you run it in.
 
 ```bash
-npm install -g stignore
 cd ~/my-synced-folder
 stignore
 ```
@@ -11,6 +10,29 @@ stignore
 That opens a page on `localhost:4568`. The top panel shows the state of that folder's
 `.stignore`. The bottom panel is a file tree marking what the file currently ignores. You tick
 folders, press a button, rules land in the file. Press Exit when you are done.
+
+## Install
+
+Not on npm. Install it from a clone, on each machine you want it:
+
+```bash
+git clone https://github.com/DavidMGDev/stignore.git
+cd stignore
+npm install
+npm run build
+npm link
+```
+
+`npm link` puts `stignore` on your PATH pointing at the clone, so pulling and rebuilding updates
+the command in place. `npm unlink -g stignore` removes it.
+
+Run `npm run build` explicitly even though `prepare` exists. npm 11 blocks lifecycle scripts by
+default, so the automatic build after `npm install` often does not fire, and you get a `stignore
+is not built yet` message instead.
+
+**Node 22.5 or newer is required.** The pattern matcher uses `path.matchesGlob`, which does not
+exist in Node 20. Older versions fail at startup with a message saying so rather than crashing
+mid-request. Check with `node --version`, and `nvm install 22` if you need it.
 
 ## What it does
 
@@ -68,9 +90,11 @@ stignore --help     Usage
 ```bash
 npm install
 npm test        # asserts the .stignore format against the Syncthing spec
-npm run dev
-npm run build
+npm run dev     # vite dev server, hot reload
+npm run build   # produces build/, which is what the CLI runs
 ```
+
+`build/` is not committed, so a clone always has to build once before the command works.
 
 `src/lib/stignore.ts` is the parser, matcher and writer, with no dependencies. It uses Node's
 built-in `path.matchesGlob`, which implements the glob grammar Syncthing documents.

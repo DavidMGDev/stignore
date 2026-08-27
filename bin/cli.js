@@ -1,13 +1,34 @@
 #!/usr/bin/env node
 
 import { spawn, exec } from 'child_process';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import open from 'open';
 import { randomUUID } from 'crypto';
 
+// The matcher uses path.matchesGlob, which landed in Node 22.5. Without this
+// check an older Node dies inside a request handler with "matchesGlob is not
+// a function", which says nothing useful.
+if (typeof path.matchesGlob !== 'function') {
+    console.error('\x1b[31m%s\x1b[0m', '✕ stignore needs Node 22.5 or newer.');
+    console.error('\x1b[90m%s\x1b[0m', `  This is Node ${process.version}.`);
+    console.error('\x1b[90m%s\x1b[0m', '  Install a newer Node (nvm install 22) and try again.');
+    process.exit(1);
+}
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const serverPath = path.join(__dirname, '../build/index.js');
+
+// build/ is not committed, so a fresh clone has dependencies but no server.
+// `npm install` normally builds it via the prepare script; say so plainly if
+// that did not happen rather than throwing a module-not-found stack.
+if (!fs.existsSync(serverPath)) {
+    console.error('\x1b[31m%s\x1b[0m', '✕ stignore is not built yet.');
+    console.error('\x1b[90m%s\x1b[0m', `  Expected: ${serverPath}`);
+    console.error('\x1b[90m%s\x1b[0m', '  Run "npm install && npm run build" in the stignore folder.');
+    process.exit(1);
+}
 
 const USER_CWD = process.cwd();
 const PORT = 4568;

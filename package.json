@@ -17,7 +17,7 @@
     "preview": "vite preview",
     "test": "node src/lib/stignore.test.ts",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
-    "prepublishOnly": "npm run build"
+    "prepare": "vite build"
   },
   "keywords": [
     "syncthing",
@@ -33,7 +33,7 @@
     "url": "https://github.com/DavidMGDev/stignore.git"
   },
   "devDependencies": {
-    "@sveltejs/adapter-node": "^5.4.0",
+    "@sveltejs/adapter-node": "^5.5.7",
     "@sveltejs/kit": "^2.48.6",
     "@sveltejs/vite-plugin-svelte": "^6.2.1",
     "@types/node": "^20.0.0",
@@ -46,8 +46,12 @@
     "vite": "^7.2.4"
   },
   "dependencies": {
-    "open": "^10.0.0",
-    "polka": "^0.5.2",
-    "sirv": "^2.0.0"
+    "open": "^10.0.0"
+  },
+  "overrides": {
+    "cookie": "^0.7.2"
+  },
+  "engines": {
+    "node": ">=22.5.0"
   }
 }
