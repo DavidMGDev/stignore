@@ -304,3 +304,54 @@ export function isSafeRelPath(p: string): boolean {
     const resolved = path.resolve(root, normalized);
     return resolved !== root && (resolved + path.sep).startsWith(root + path.sep);
 }
+
+/**
+ * Empty the rules.
+ *
+ * `managed` removes only what this tool wrote, so hand-written lines survive.
+ * `all` empties both files completely. In shared mode `.stglobalignore` is
+ * truncated rather than deleted, because `.stignore` includes it and Syncthing
+ * errors the whole folder on a missing include target.
+ */
+export async function clearRules(
+    scope: 'managed' | 'all'
+): Promise<{ ok: boolean; error?: string; cleared: number }> {
+    const before = await readState();
+    const cleared = before.parsed.rules.filter((r) => (scope === 'all' ? true : r.managed)).length;
+
+    if (!before.stignore.readable || !before.global.readable) {
+        return { ok: false, error: before.stignore.error || before.global.error || 'unreadable', cleared: 0 };
+    }
+
+    try {
+        if (before.stignore.exists) await backup(stignorePath());
+        if (before.global.exists) await backup(globalIgnorePath());
+
+        if (scope === 'all') {
+            // Keep the include wiring intact when sharing is on, so the folder
+            // does not error, but drop every rule from both files.
+            if (before.shared) {
+                await writeAtomic(globalIgnorePath(), '', before.global.hasBom);
+                await writeAtomic(
+                    stignorePath(),
+                    renderStignore('', [INCLUDE_LINE]),
+                    before.stignore.hasBom
+                );
+            } else {
+                await writeAtomic(stignorePath(), null, false);
+            }
+        } else {
+            const target = before.shared ? globalIgnorePath() : stignorePath();
+            const targetFacts = before.shared ? before.global : before.stignore;
+            const rendered = renderStignore(targetFacts.text, []);
+            await writeAtomic(
+                target,
+                rendered === null && before.shared ? '' : rendered,
+                targetFacts.hasBom
+            );
+        }
+        return { ok: true, cleared };
+    } catch (e: any) {
+        return { ok: false, error: e?.code || String(e), cleared: 0 };
+    }
+}

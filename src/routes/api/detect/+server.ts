@@ -4,7 +4,7 @@ import { getCwd } from '$lib/server/sys-utils';
 import { readState } from '$lib/server/stignore-file';
 
 const DEFAULT_DEPTH = 3;
-const MAX_DEPTH = 8;
+const MAX_DEPTH = 12;
 
 export async function GET({ url }) {
     const raw = Number(url.searchParams.get('depth'));

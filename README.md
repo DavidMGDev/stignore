@@ -38,7 +38,15 @@ mid-request. Check with `node --version`, and `nvm install 22` if you need it.
 
 **Finds the junk for you.** `node_modules`, `.venv`, `__pycache__`, `dist`, `target` and about
 thirty other generated directories, down to a configurable depth. Depth 1 is direct children,
-depth 3 reaches `packages/<name>/node_modules` in a monorepo. Default 3.
+depth 3 reaches `packages/<name>/node_modules` in a monorepo, and Max goes to 12. Default 3.
+If a folder sits deeper than the current depth, detection cannot see it, so the button says
+which case you are in rather than just greying out.
+
+**Works on any folder.** Change swaps the folder from the page, with the OS dialog or a typed
+path. No restarting the command.
+
+**Clears out.** Clear drops the rules this tool wrote and leaves your own lines, or empties the
+file completely. Either way the previous version is copied outside the synced folder first.
 
 **Ignores what you tick.** Select anything in the tree and add it. Selecting a folder and its
 contents writes one rule, not two hundred.

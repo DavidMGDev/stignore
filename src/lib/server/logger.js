@@ -1,4 +1,5 @@
-export function logDebug(message, data = null) {
+/** @param {string} message @param {unknown} [data] */
+export function logDebug(message, data = undefined) {
     if (process.env.STIGNORE_DEBUG !== 'true') return;
     const stamp = new Date().toISOString().slice(11, 23);
     console.log(`\x1b[35m[debug ${stamp}]\x1b[0m ${message}`);

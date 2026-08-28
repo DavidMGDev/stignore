@@ -19,7 +19,7 @@
 
     let selectedPaths: Set<string> = $state(new Set());
     let folderDescendants = new Map<string, string[]>();
-    let nodeMeta = new Map<string, { isIgnored: boolean; isManaged: boolean }>();
+    let nodeMeta: Map<string, { isIgnored: boolean; isManaged: boolean }> = $state(new Map());
 
     let confirmAction: {
         mode: 'add' | 'remove';
@@ -30,6 +30,9 @@
     let managedOpen = $state(false);
     let copied = $state(false);
     let presetsOpen = $state(false);
+    let folderOpen = $state(false);
+    let folderInput = $state('');
+    let clearAsk: 'managed' | 'all' | null = $state(null);
 
     /**
      * Which catalogue patterns are currently in the file. Nothing is on by
@@ -44,6 +47,8 @@
         const on = g.patterns.filter((p) => activeLines.has(p)).length;
         return on === 0 ? 'none' : on === g.patterns.length ? 'all' : 'some';
     }
+
+    const MAX_DEPTH = 12;
 
     let healthTimer: any;
 
@@ -98,17 +103,21 @@
 
     onDestroy(() => clearInterval(healthTimer));
 
-    function depthKey() {
-        return `stignore:depth:${status?.cwd || ''}`;
-    }
-
-    function readSavedDepth(): number {
+    function readSavedDepthFor(cwd: string): number {
         try {
-            const v = Number(localStorage.getItem(depthKey()));
-            return Number.isFinite(v) && v >= 1 && v <= 8 ? v : 3;
+            const v = Number(localStorage.getItem(`stignore:depth:${cwd}`));
+            return Number.isFinite(v) && v >= 1 && v <= MAX_DEPTH ? v : 3;
         } catch {
             return 3;
         }
+    }
+
+    function readSavedDepth(): number {
+        return readSavedDepthFor(status?.cwd || '');
+    }
+
+    function depthKey() {
+        return `stignore:depth:${status?.cwd || ''}`;
     }
 
     function saveDepth(v: number) {
@@ -152,9 +161,10 @@
         try {
             const data = await (await fetch('/api/tree')).json();
             treeNodes = data.tree || [];
-            nodeMeta.clear();
+            nodeMeta = new Map();
             folderDescendants.clear();
             indexTree(treeNodes);
+            nodeMeta = new Map(nodeMeta);
             // Drop anything that no longer exists so counts stay honest.
             selectedPaths = new Set(
                 [...selectedPaths].filter((p) => nodeMeta.has(p))
@@ -287,12 +297,10 @@
 
             if (data.ok) {
                 selectedPaths = new Set();
-                await refreshStatus();
-                await Promise.all([loadTree(false), loadDetected()]);
+                await reloadAll();
             } else if (data.conflict) {
                 // Someone edited the file underneath us. Reload rather than merge.
-                await refreshStatus();
-                await Promise.all([loadTree(false), loadDetected()]);
+                await reloadAll();
             }
         } catch {
             result = { mode, ok: false, error: 'Could not reach the server.' };
@@ -302,7 +310,7 @@
     }
 
     async function changeDepth(next: number) {
-        depth = Math.min(8, Math.max(1, next));
+        depth = Math.min(MAX_DEPTH, Math.max(1, next));
         saveDepth(depth);
         await loadDetected();
     }
@@ -333,8 +341,7 @@
             });
             const data = await res.json();
             if (!data.ok) result = { mode: 'add', ...data };
-            await refreshStatus();
-            await Promise.all([loadTree(false), loadDetected()]);
+            await reloadAll();
         } catch {
             result = { mode: 'add', ok: false, error: 'Could not reach the server.' };
         } finally {
@@ -363,10 +370,63 @@
             });
             const data = await res.json();
             if (!data.ok) result = { mode: 'add', ok: false, error: data.error };
-            await refreshStatus();
-            await Promise.all([loadTree(false), loadDetected()]);
+            await reloadAll();
         } catch {
             result = { mode: 'add', ok: false, error: 'Could not reach the server.' };
+        } finally {
+            busy = false;
+        }
+    }
+
+    /** Reload everything after the folder or the file changes underneath us. */
+    async function reloadAll() {
+        await refreshStatus();
+        await Promise.all([loadTree(false), loadDetected()]);
+    }
+
+    async function switchFolder(action: 'browse' | 'set', p = '') {
+        busy = true;
+        try {
+            const res = await fetch('/api/folder', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action, path: p })
+            });
+            const data = await res.json();
+            if (!data.ok) {
+                result = { mode: 'add', ok: false, error: data.error };
+                return;
+            }
+            if (data.cancelled) return;
+            selectedPaths = new Set();
+            folderInput = '';
+            folderOpen = false;
+            depth = readSavedDepthFor(data.cwd);
+            await reloadAll();
+        } catch {
+            result = { mode: 'add', ok: false, error: 'Could not reach the server.' };
+        } finally {
+            busy = false;
+        }
+    }
+
+    async function doClear(scope: 'managed' | 'all') {
+        clearAsk = null;
+        busy = true;
+        try {
+            const res = await fetch('/api/clear', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ scope })
+            });
+            const data = await res.json();
+            result = data.ok
+                ? { mode: 'remove', ok: true, removed: new Array(data.cleared), shadowed: [] }
+                : { mode: 'remove', ok: false, error: data.error };
+            selectedPaths = new Set();
+            await reloadAll();
+        } catch {
+            result = { mode: 'remove', ok: false, error: 'Could not reach the server.' };
         } finally {
             busy = false;
         }
@@ -505,6 +565,68 @@
         </div>
     {/if}
 
+    <!-- clear -->
+    {#if clearAsk}
+        <div class="fixed inset-0 z-[105] flex items-center justify-center bg-black/90 backdrop-blur-md p-6" transition:fade>
+            <div class="bg-[#0a0a0a] border border-rose-500/30 rounded-3xl p-8 w-full max-w-lg animate-fade-in-up">
+                <h3 class="text-xl font-black text-white mb-2 tracking-tight">Clear ignore rules</h3>
+                <p class="text-[11px] text-slate-500 font-mono mb-4 break-all">{status?.file?.targetPath}</p>
+
+                <div class="flex flex-col gap-3">
+                    <button
+                        onclick={() => doClear('managed')}
+                        class="text-left px-4 py-3 rounded-xl border border-cyan-500/30 bg-cyan-500/10 hover:bg-cyan-500/20 transition-all"
+                    >
+                        <div class="text-xs font-black text-cyan-100">
+                            Remove the {status?.counts?.managed ?? 0} managed rule{status?.counts?.managed === 1 ? '' : 's'}
+                        </div>
+                        <div class="text-[10px] text-slate-400 mt-1 leading-relaxed">
+                            Everything this tool wrote. Your own
+                            {status?.counts?.manual ?? 0} hand-written line{status?.counts?.manual === 1 ? '' : 's'} stay.
+                        </div>
+                    </button>
+
+                    <button
+                        onclick={() => doClear('all')}
+                        class="text-left px-4 py-3 rounded-xl border border-rose-500/40 bg-rose-950/30 hover:bg-rose-900/40 transition-all"
+                    >
+                        <div class="text-xs font-black text-rose-200">
+                            Empty the file completely ({status?.counts?.total ?? 0} rules)
+                        </div>
+                        <div class="text-[10px] text-slate-400 mt-1 leading-relaxed">
+                            Wipes hand-written rules too, and deletes
+                            <code class="text-slate-300">.stignore</code> if nothing is left.
+                            {#if status?.shared}
+                                Sharing stays wired up so the folder does not error.
+                            {/if}
+                        </div>
+                    </button>
+
+                    {#if status?.file?.raw}
+                        <details class="bg-black/50 rounded-xl border border-white/5">
+                            <summary class="cursor-pointer text-[10px] uppercase font-bold tracking-wider text-slate-500 hover:text-cyan-300 px-3 py-2">
+                                Show what is in there now
+                            </summary>
+                            <pre class="px-3 pb-3 text-[10px] font-mono text-slate-400 whitespace-pre-wrap break-all max-h-48 overflow-y-auto custom-scrollbar">{status.file.raw}</pre>
+                        </details>
+                    {/if}
+
+                    <p class="text-[10px] text-slate-600 leading-relaxed">
+                        A copy of the previous file is kept outside the synced folder, so a
+                        mistake here is recoverable.
+                    </p>
+
+                    <button
+                        onclick={() => (clearAsk = null)}
+                        class="w-full py-3 text-slate-400 hover:text-white text-sm font-bold transition-colors"
+                    >
+                        Cancel
+                    </button>
+                </div>
+            </div>
+        </div>
+    {/if}
+
     <!-- result -->
     {#if result}
         <div class="fixed inset-0 z-[110] flex items-center justify-center bg-black/90 backdrop-blur-md p-6" transition:fade>
@@ -596,15 +718,57 @@
             </button>
         </div>
 
-        <div class="mt-6 inline-flex flex-wrap items-center justify-center gap-3 bg-black/40 backdrop-blur-md px-5 py-2 rounded-2xl border border-white/5 max-w-[90vw]">
-            <span class="text-slate-500 text-[10px] uppercase font-bold tracking-[0.2em]">Folder</span>
-            <span class="text-cyan-300 font-mono text-xs break-all">{status?.cwd || '...'}</span>
-            <button
-                onclick={() => openFile('folder')}
-                class="px-3 py-1 bg-white/5 hover:bg-cyan-500/10 border border-white/10 hover:border-cyan-500/30 text-[10px] font-bold uppercase tracking-wider text-slate-400 hover:text-cyan-300 rounded transition-all"
-            >
-                Open
-            </button>
+        <div class="mt-6 inline-flex flex-col items-center gap-2 bg-black/40 backdrop-blur-md px-5 py-3 rounded-2xl border border-white/5 max-w-[90vw]">
+            <div class="flex flex-wrap items-center justify-center gap-3">
+                <span class="text-slate-500 text-[10px] uppercase font-bold tracking-[0.2em]">Folder</span>
+                <span class="text-cyan-300 font-mono text-xs break-all">{status?.cwd || '...'}</span>
+                <button
+                    onclick={() => switchFolder('browse')}
+                    disabled={busy}
+                    class="px-3 py-1 bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-500/30 text-[10px] font-bold uppercase tracking-wider text-cyan-200 rounded transition-all disabled:opacity-40"
+                >
+                    Change
+                </button>
+                <button
+                    onclick={() => openFile('folder')}
+                    class="px-3 py-1 bg-white/5 hover:bg-cyan-500/10 border border-white/10 hover:border-cyan-500/30 text-[10px] font-bold uppercase tracking-wider text-slate-400 hover:text-cyan-300 rounded transition-all"
+                >
+                    Open
+                </button>
+                <button
+                    onclick={() => (folderOpen = !folderOpen)}
+                    class="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-600 hover:text-cyan-300 transition-colors"
+                    title="Type a path instead"
+                >
+                    {folderOpen ? '×' : '⌨'}
+                </button>
+            </div>
+
+            {#if folderOpen}
+                <!-- The dialog needs a desktop session. Typing a path always works. -->
+                <form
+                    transition:slide={{ duration: 150 }}
+                    class="flex gap-2 w-full"
+                    onsubmit={(e) => {
+                        e.preventDefault();
+                        if (folderInput.trim()) switchFolder('set', folderInput);
+                    }}
+                >
+                    <input
+                        bind:value={folderInput}
+                        placeholder="/path/to/synced/folder"
+                        spellcheck="false"
+                        class="flex-1 min-w-[16rem] bg-black/50 border border-white/10 focus:border-cyan-500/40 rounded px-3 py-1.5 text-xs font-mono text-slate-200 outline-none"
+                    />
+                    <button
+                        type="submit"
+                        disabled={busy || !folderInput.trim()}
+                        class="px-3 py-1.5 bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-500/30 text-[10px] font-bold uppercase tracking-wider text-cyan-200 rounded transition-all disabled:opacity-30"
+                    >
+                        Go
+                    </button>
+                </form>
+            {/if}
         </div>
     </div>
 
@@ -651,6 +815,13 @@
                         class="px-3 py-1.5 rounded-lg border border-white/10 bg-white/5 hover:bg-cyan-500/10 hover:border-cyan-500/30 text-[10px] uppercase font-bold tracking-wider text-slate-400 hover:text-cyan-300 transition-all"
                     >
                         Reload
+                    </button>
+                    <button
+                        onclick={() => (clearAsk = 'managed')}
+                        disabled={!status?.counts?.total}
+                        class="px-3 py-1.5 rounded-lg border border-rose-500/25 bg-rose-950/20 hover:bg-rose-900/40 text-[10px] uppercase font-bold tracking-wider text-rose-300/90 hover:text-rose-200 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+                    >
+                        Clear
                     </button>
                 </div>
             </div>
@@ -896,22 +1067,39 @@
                         <span class="text-[9px] text-slate-600">levels to search</span>
                     </div>
                     <div class="flex items-center gap-1 ml-2">
-                        <button onclick={() => changeDepth(depth - 1)} disabled={depth <= 1} aria-label="Decrease depth" class="w-6 h-6 rounded bg-white/5 hover:bg-cyan-500/20 text-slate-400 hover:text-cyan-300 disabled:opacity-30 transition-all">−</button>
+                        <button onclick={() => changeDepth(depth - 1)} disabled={depth <= 1} aria-label="Search one level shallower" class="w-6 h-6 rounded bg-white/5 hover:bg-cyan-500/20 text-slate-400 hover:text-cyan-300 disabled:opacity-30 transition-all">−</button>
                         <span class="w-6 text-center font-mono text-sm text-cyan-300">{depth}</span>
-                        <button onclick={() => changeDepth(depth + 1)} disabled={depth >= 8} aria-label="Increase depth" class="w-6 h-6 rounded bg-white/5 hover:bg-cyan-500/20 text-slate-400 hover:text-cyan-300 disabled:opacity-30 transition-all">+</button>
+                        <button onclick={() => changeDepth(depth + 1)} disabled={depth >= MAX_DEPTH} aria-label="Search one level deeper" class="w-6 h-6 rounded bg-white/5 hover:bg-cyan-500/20 text-slate-400 hover:text-cyan-300 disabled:opacity-30 transition-all">+</button>
+                        <button
+                            onclick={() => changeDepth(MAX_DEPTH)}
+                            disabled={depth >= MAX_DEPTH}
+                            title="Search as deep as it goes"
+                            class="ml-1 px-2 h-6 rounded bg-white/5 hover:bg-cyan-500/20 text-[9px] uppercase font-bold tracking-wider text-slate-500 hover:text-cyan-300 disabled:opacity-30 transition-all"
+                        >
+                            Max
+                        </button>
                     </div>
                 </div>
 
                 <button
                     onclick={askIgnoreDetected}
                     disabled={!pendingDetected.length || !status?.file?.readable}
-                    class="flex-1 min-w-[14rem] px-5 py-3 rounded-xl bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 hover:border-cyan-400/60 text-left transition-all disabled:opacity-30 disabled:cursor-not-allowed group"
+                    class="flex-1 min-w-[15rem] px-5 py-3 rounded-xl bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 hover:border-cyan-400/60 text-left transition-all disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                     <div class="text-xs font-black text-cyan-100 tracking-tight">
                         Ignore detected junk ({pendingDetected.length})
                     </div>
-                    <div class="text-[10px] text-slate-500 font-mono mt-0.5">
-                        {detected.length} found at depth {depth}
+                    <!-- Say why the button is dead, rather than just greying it out. -->
+                    <div class="text-[10px] font-mono mt-0.5 {pendingDetected.length ? 'text-slate-500' : 'text-amber-400/80'}">
+                        {#if pendingDetected.length}
+                            {detected.length} found within {depth} level{depth === 1 ? '' : 's'}
+                        {:else if detected.length}
+                            all {detected.length} already ignored
+                        {:else if depth < MAX_DEPTH}
+                            nothing within {depth} level{depth === 1 ? '' : 's'}, try deeper
+                        {:else}
+                            nothing found at any depth
+                        {/if}
                     </div>
                 </button>
 
