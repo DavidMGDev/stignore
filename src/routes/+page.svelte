@@ -27,6 +27,7 @@
     } | null = $state(null);
     let result: any = $state(null);
     let managedOpen = $state(false);
+    let copied = $state(false);
 
     let healthTimer: any;
 
@@ -290,6 +291,21 @@
         await loadDetected();
     }
 
+    /**
+     * Ignore rules are per device: Syncthing never syncs .stignore. Handing the
+     * file to the clipboard is the practical way to repeat them on a phone or
+     * another machine, where there is no shell to run this tool.
+     */
+    async function copyRules() {
+        try {
+            await navigator.clipboard.writeText(status?.file?.raw || '');
+            copied = true;
+            setTimeout(() => (copied = false), 2000);
+        } catch {
+            result = { mode: 'add', ok: false, error: 'The browser blocked clipboard access. Use Open file instead.' };
+        }
+    }
+
     async function openFile(target: 'file' | 'folder') {
         await fetch('/api/open', {
             method: 'POST',
@@ -544,6 +560,17 @@
 
                 <div class="flex gap-2">
                     <button
+                        onclick={copyRules}
+                        disabled={!status?.file?.exists}
+                        class="px-3 py-1.5 rounded-lg border text-[10px] uppercase font-bold tracking-wider transition-all disabled:opacity-30 disabled:cursor-not-allowed
+                        {copied
+                            ? 'border-cyan-500/50 bg-cyan-500/20 text-cyan-200'
+                            : 'border-white/10 bg-white/5 hover:bg-cyan-500/10 hover:border-cyan-500/30 text-slate-400 hover:text-cyan-300'}"
+                        title="Copy the whole file, to paste into another device's ignore patterns"
+                    >
+                        {copied ? 'Copied' : 'Copy rules'}
+                    </button>
+                    <button
                         onclick={() => openFile('file')}
                         disabled={!status?.file?.exists}
                         class="px-3 py-1.5 rounded-lg border border-white/10 bg-white/5 hover:bg-cyan-500/10 hover:border-cyan-500/30 text-[10px] uppercase font-bold tracking-wider text-slate-400 hover:text-cyan-300 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
@@ -574,6 +601,16 @@
                     <p class="text-[11px] text-amber-300/90 bg-amber-950/20 border border-amber-500/20 rounded-lg px-4 py-2.5">
                         No .stfolder marker here, so Syncthing probably is not syncing this
                         directory yet. A .stignore only takes effect at a folder root.
+                    </p>
+                {/if}
+                {#if status?.hasStfolder}
+                    <p class="text-[11px] text-slate-400 bg-slate-900/40 border border-white/10 rounded-lg px-4 py-2.5 leading-relaxed">
+                        <span class="text-cyan-300 font-bold">Ignore rules are per device.</span>
+                        Syncthing never syncs <code class="text-slate-300">.stignore</code> itself, so
+                        these rules only apply here. Any other device sharing this folder keeps its
+                        own copy of the files and will hold them in the global index. Set the same
+                        rules on every device, with Copy rules below or the ignore patterns editor
+                        in that device's Syncthing UI.
                     </p>
                 {/if}
                 {#if status?.hasEscapeDirective}

@@ -34,7 +34,10 @@ export async function GET() {
             path: state.path,
             size: state.size,
             mtimeMs: state.mtimeMs,
-            lineCount: state.exists ? state.parsed.lines.length : 0
+            lineCount: state.exists ? state.parsed.lines.length : 0,
+            // The whole file, so the UI can hand it to another device.
+            // .stignore is per device and Syncthing never syncs it.
+            raw: state.exists ? state.text : ''
         },
         counts: {
             total: rules.length,
