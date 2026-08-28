@@ -13,7 +13,10 @@ import {
     renderStignore,
     managedPatterns,
     MANAGED_BEGIN,
-    MANAGED_END
+    MANAGED_END,
+    INCLUDE_LINE,
+    GLOBAL_IGNORE_FILE,
+    isSharedMode
 } from './stignore.ts';
 
 const ign = (file: string, p: string) => isIgnored(p, parseStignore(file).rules);
@@ -150,5 +153,54 @@ assert.ok(kept.includes('(?d)/node_modules'));
 const carved = renderStignore('!/dist/keep.txt' + NL, ['(?d)/dist'])!;
 assert.equal(ign(carved, 'dist/keep.txt'), false);
 assert.equal(ign(carved, 'dist/other.txt'), true);
+
+// --- #include ---------------------------------------------------------------
+
+// `.stignore` never syncs, so the shared-rules trick is to include a file that
+// does. Patterns from the included file have to apply as if written in place.
+const shared = [MANAGED_BEGIN, '(?d)/node_modules', '*.log', MANAGED_END, ''].join(NL);
+const host = ['// mine', MANAGED_BEGIN, INCLUDE_LINE, MANAGED_END, ''].join(NL);
+const resolver = (n: string) => (n === GLOBAL_IGNORE_FILE ? shared : null);
+
+const inc = parseStignore(host, resolver);
+assert.equal(isSharedMode(inc), true);
+assert.equal(inc.missingIncludes.length, 0);
+assert.equal(isIgnored('node_modules/react/x.js', inc.rules), true);
+assert.equal(isIgnored('logs/a.log', inc.rules), true);
+assert.equal(isIgnored('notes/a.md', inc.rules), false);
+// Rules carry the file they came from, so the UI can say where a rule lives.
+assert.equal(inc.rules[0].source, GLOBAL_IGNORE_FILE);
+assert.equal(inc.rules[0].managed, true);
+
+// Patterns inline where the directive sits, so a negation ABOVE the include
+// still wins under first-match. This is the whole reason the include is not
+// simply appended at the end.
+const carve = parseStignore(
+    ['!/logs/keep.log', MANAGED_BEGIN, INCLUDE_LINE, MANAGED_END, ''].join(NL),
+    resolver
+);
+assert.equal(isIgnored('logs/keep.log', carve.rules), false);
+assert.equal(isIgnored('logs/other.log', carve.rules), true);
+
+// A missing include is a folder error in Syncthing, so it must be reported.
+const broken = parseStignore(host, () => null);
+assert.deepEqual(broken.missingIncludes, [GLOBAL_IGNORE_FILE]);
+
+// Without a resolver we still record the include but follow nothing.
+const unresolved = parseStignore(host);
+assert.deepEqual(unresolved.includes, [GLOBAL_IGNORE_FILE]);
+assert.equal(unresolved.rules.length, 0);
+assert.equal(unresolved.missingIncludes.length, 0);
+
+// A file that includes itself must not loop forever.
+const selfRef = ['#include a', ''].join(NL);
+const loop = parseStignore(selfRef, (n) => (n === 'a' ? selfRef : null));
+assert.equal(loop.rules.length, 0);
+
+// Catalogue patterns survive a managed-block rewrite unchanged.
+assert.equal(
+    managedPatterns(parseStignore(renderStignore('', ['*.log', '.DS_Store'])!)).length,
+    2
+);
 
 console.log('stignore: all assertions passed');

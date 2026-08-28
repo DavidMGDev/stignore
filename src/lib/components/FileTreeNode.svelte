@@ -91,7 +91,7 @@
             }}
             disabled={node.neverSynced}
             title={node.neverSynced
-                ? 'Syncthing handles this name itself. A rule for it would do nothing.'
+                ? 'Protected. Ignoring this file would break ignore handling itself.'
                 : fullyChecked
                   ? 'Deselect'
                   : 'Select'}

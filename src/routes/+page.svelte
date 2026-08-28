@@ -2,6 +2,7 @@
     import { onMount, onDestroy } from 'svelte';
     import { fade, slide } from 'svelte/transition';
     import FileTreeNode from '$lib/components/FileTreeNode.svelte';
+    import { PRESET_GROUPS, type PresetGroup } from '$lib/presets';
 
     // --- state ---------------------------------------------------------------
 
@@ -28,6 +29,21 @@
     let result: any = $state(null);
     let managedOpen = $state(false);
     let copied = $state(false);
+    let presetsOpen = $state(false);
+
+    /**
+     * Which catalogue patterns are currently in the file. Nothing is on by
+     * default: the file is the state, so a pattern is ticked only because it
+     * is actually written.
+     */
+    const activeLines = $derived(
+        new Set<string>((status?.managedRules || []).map((r: any) => r.line))
+    );
+
+    function groupState(g: PresetGroup): 'all' | 'some' | 'none' {
+        const on = g.patterns.filter((p) => activeLines.has(p)).length;
+        return on === 0 ? 'none' : on === g.patterns.length ? 'all' : 'some';
+    }
 
     let healthTimer: any;
 
@@ -303,6 +319,56 @@
             setTimeout(() => (copied = false), 2000);
         } catch {
             result = { mode: 'add', ok: false, error: 'The browser blocked clipboard access. Use Open file instead.' };
+        }
+    }
+
+    /** Write or unwrite literal catalogue lines. No confirm: one click, visibly reversible. */
+    async function writeLines(addLines: string[], removeLines: string[]) {
+        busy = true;
+        try {
+            const res = await fetch('/api/rules', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ addLines, removeLines })
+            });
+            const data = await res.json();
+            if (!data.ok) result = { mode: 'add', ...data };
+            await refreshStatus();
+            await Promise.all([loadTree(false), loadDetected()]);
+        } catch {
+            result = { mode: 'add', ok: false, error: 'Could not reach the server.' };
+        } finally {
+            busy = false;
+        }
+    }
+
+    function togglePreset(pattern: string) {
+        if (activeLines.has(pattern)) writeLines([], [pattern]);
+        else writeLines([pattern], []);
+    }
+
+    function toggleGroup(g: PresetGroup) {
+        if (groupState(g) === 'all') writeLines([], g.patterns);
+        else writeLines(g.patterns.filter((p) => !activeLines.has(p)), []);
+    }
+
+    /** Move rules between this device only and the shared, synced file. */
+    async function toggleShared() {
+        busy = true;
+        try {
+            const res = await fetch('/api/share', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ shared: !status?.shared })
+            });
+            const data = await res.json();
+            if (!data.ok) result = { mode: 'add', ok: false, error: data.error };
+            await refreshStatus();
+            await Promise.all([loadTree(false), loadDetected()]);
+        } catch {
+            result = { mode: 'add', ok: false, error: 'Could not reach the server.' };
+        } finally {
+            busy = false;
         }
     }
 
@@ -603,15 +669,53 @@
                         directory yet. A .stignore only takes effect at a folder root.
                     </p>
                 {/if}
-                {#if status?.hasStfolder}
-                    <p class="text-[11px] text-slate-400 bg-slate-900/40 border border-white/10 rounded-lg px-4 py-2.5 leading-relaxed">
-                        <span class="text-cyan-300 font-bold">Ignore rules are per device.</span>
-                        Syncthing never syncs <code class="text-slate-300">.stignore</code> itself, so
-                        these rules only apply here. Any other device sharing this folder keeps its
-                        own copy of the files and will hold them in the global index. Set the same
-                        rules on every device, with Copy rules below or the ignore patterns editor
-                        in that device's Syncthing UI.
+                {#if status?.missingIncludes?.length}
+                    <p class="text-[11px] text-rose-300 bg-rose-950/30 border border-rose-500/20 rounded-lg px-4 py-2.5 leading-relaxed">
+                        <span class="font-bold">Broken include.</span>
+                        <code class="text-slate-300">.stignore</code> includes
+                        <code class="text-slate-300">{status.missingIncludes.join(', ')}</code>, which
+                        is not here. Syncthing treats a missing include as a folder error, so no
+                        rules are being applied at all. Restore the file or remove the include line.
                     </p>
+                {/if}
+
+                {#if status?.hasStfolder}
+                    <div class="bg-slate-900/40 border border-white/10 rounded-lg px-4 py-3">
+                        <div class="flex items-start justify-between gap-4">
+                            <div class="min-w-0">
+                                <div class="text-[11px] font-bold uppercase tracking-wider mb-1 {status.shared ? 'text-cyan-300' : 'text-amber-300'}">
+                                    {status.shared ? 'Shared with every device' : 'This device only'}
+                                </div>
+                                <p class="text-[11px] text-slate-400 leading-relaxed">
+                                    {#if status.shared}
+                                        Rules live in <code class="text-slate-300">{status.globalFileName}</code>,
+                                        which the folder syncs like any other file, and
+                                        <code class="text-slate-300">.stignore</code> pulls them in with
+                                        <code class="text-slate-300">#include</code>. Every device that
+                                        includes that file gets these rules. A device still needs the
+                                        include line in its own <code class="text-slate-300">.stignore</code> once.
+                                    {:else}
+                                        Syncthing never syncs <code class="text-slate-300">.stignore</code>,
+                                        so these rules apply here and nowhere else. Other devices keep
+                                        their copies and push the files back. Sharing moves the rules
+                                        into <code class="text-slate-300">{status.globalFileName}</code>,
+                                        which does sync.
+                                    {/if}
+                                </p>
+                            </div>
+
+                            <button
+                                onclick={toggleShared}
+                                disabled={busy || !status?.file?.readable}
+                                class="shrink-0 px-3 py-1.5 rounded-lg border text-[10px] uppercase font-bold tracking-wider transition-all disabled:opacity-30 disabled:cursor-not-allowed
+                                {status.shared
+                                    ? 'border-white/10 bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white'
+                                    : 'border-cyan-500/40 bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-200'}"
+                            >
+                                {status.shared ? 'Make local' : 'Share with all devices'}
+                            </button>
+                        </div>
+                    </div>
                 {/if}
                 {#if status?.hasEscapeDirective}
                     <p class="text-[11px] text-amber-300/90 bg-amber-950/20 border border-amber-500/20 rounded-lg px-4 py-2.5">
@@ -639,6 +743,96 @@
                         <div class="text-xs font-mono text-slate-300 break-all">{value}</div>
                     </div>
                 {/each}
+            </div>
+
+            <!-- common patterns catalogue -->
+            <div class="mt-6 border-t border-white/5 pt-4">
+                <button
+                    onclick={() => (presetsOpen = !presetsOpen)}
+                    class="text-[10px] uppercase font-bold tracking-widest text-slate-500 hover:text-cyan-300 transition-colors flex items-center gap-2"
+                >
+                    <span class="transition-transform duration-200 {presetsOpen ? 'rotate-90' : ''}">▶</span>
+                    Common patterns
+                    <span class="text-slate-700 normal-case tracking-normal font-normal">
+                        ({PRESET_GROUPS.reduce((n, g) => n + g.patterns.filter((p) => activeLines.has(p)).length, 0)} on)
+                    </span>
+                </button>
+
+                {#if presetsOpen}
+                    <div transition:slide={{ duration: 200 }} class="mt-3 flex flex-col gap-3">
+                        <p class="text-[11px] text-slate-500 leading-relaxed">
+                            Nothing here is on until you turn it on. Click a group to toggle all of
+                            it, or a single pattern to toggle just that one. Everything written here
+                            goes in the managed block and comes back out the same way.
+                        </p>
+
+                        {#each PRESET_GROUPS as g (g.id)}
+                            {@const st = groupState(g)}
+                            <div
+                                class="rounded-xl border p-3 transition-colors
+                                {st === 'none'
+                                    ? 'border-white/5 bg-black/20'
+                                    : g.risk === 'risky'
+                                      ? 'border-rose-500/30 bg-rose-950/20'
+                                      : 'border-cyan-500/30 bg-cyan-950/20'}"
+                            >
+                                <div class="flex items-start justify-between gap-3 mb-2">
+                                    <div class="min-w-0">
+                                        <button
+                                            onclick={() => toggleGroup(g)}
+                                            disabled={busy}
+                                            class="text-left group/g disabled:opacity-50"
+                                        >
+                                            <span class="text-xs font-bold text-slate-200 group-hover/g:text-cyan-200 transition-colors">
+                                                {g.name}
+                                            </span>
+                                            <span
+                                                class="ml-2 text-[9px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded border
+                                                {g.risk === 'safe'
+                                                    ? 'border-emerald-900/50 text-emerald-400/80 bg-emerald-950/30'
+                                                    : g.risk === 'careful'
+                                                      ? 'border-amber-900/50 text-amber-400/80 bg-amber-950/30'
+                                                      : 'border-rose-900/50 text-rose-400/90 bg-rose-950/30'}"
+                                            >
+                                                {g.risk}
+                                            </span>
+                                        </button>
+                                        <p class="text-[10px] text-slate-500 mt-1 leading-relaxed">{g.note}</p>
+                                    </div>
+
+                                    <button
+                                        onclick={() => toggleGroup(g)}
+                                        disabled={busy}
+                                        class="shrink-0 px-2.5 py-1 rounded-lg border text-[9px] uppercase font-bold tracking-wider transition-all disabled:opacity-30
+                                        {st === 'all'
+                                            ? 'border-cyan-500/40 bg-cyan-500/20 text-cyan-200'
+                                            : st === 'some'
+                                              ? 'border-cyan-500/30 bg-cyan-950/40 text-cyan-400'
+                                              : 'border-white/10 bg-white/5 text-slate-500 hover:text-cyan-300 hover:border-cyan-500/30'}"
+                                    >
+                                        {st === 'all' ? 'All on' : st === 'some' ? 'Some' : 'Off'}
+                                    </button>
+                                </div>
+
+                                <div class="flex flex-wrap gap-1.5">
+                                    {#each g.patterns as p (p)}
+                                        <button
+                                            onclick={() => togglePreset(p)}
+                                            disabled={busy}
+                                            title={activeLines.has(p) ? 'Remove from .stignore' : 'Add to .stignore'}
+                                            class="text-[10px] font-mono px-2 py-0.5 rounded border transition-all disabled:opacity-40
+                                            {activeLines.has(p)
+                                                ? 'border-cyan-500/50 bg-cyan-500/20 text-cyan-200'
+                                                : 'border-slate-800 bg-slate-900/60 text-slate-500 hover:border-cyan-500/30 hover:text-cyan-300'}"
+                                        >
+                                            {p}
+                                        </button>
+                                    {/each}
+                                </div>
+                            </div>
+                        {/each}
+                    </div>
+                {/if}
             </div>
 
             <!-- managed rules -->

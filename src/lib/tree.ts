@@ -67,8 +67,13 @@ const MASSIVE_DIRS = new Set([
 
 const MAX_FOLDER_ITEMS = 250;
 
-/** Syncthing's own folder marker. Ignoring it would break the folder. */
-const NEVER_TOUCH = new Set(['.stfolder', '.stignore', '.stversions']);
+/**
+ * Names that must never carry an ignore rule. `.stfolder` and `.stversions`
+ * belong to Syncthing. `.stignore` is never synced anyway. `.stglobalignore`
+ * has to keep syncing, since ignoring it is exactly what would stop the shared
+ * rules reaching the other devices.
+ */
+const NEVER_TOUCH = new Set(['.stfolder', '.stignore', '.stversions', '.stglobalignore']);
 
 export function isJunkName(name: string): boolean {
     return JUNK_DIRS.has(name) || name.endsWith('.egg-info');

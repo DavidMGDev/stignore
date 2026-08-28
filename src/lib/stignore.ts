@@ -11,6 +11,19 @@ import path from 'path';
 
 export const STIGNORE_FILE = '.stignore';
 
+/**
+ * The shared pattern file.
+ *
+ * Syncthing never syncs `.stignore` itself, so rules written there apply to one
+ * device and no other. A file the folder *does* sync, pulled in with `#include`,
+ * is the documented way around that: write the rules once, every device gets
+ * them, and each device's `.stignore` only has to carry the include line.
+ *
+ * `.stglobalignore` is the name the Syncthing community settled on.
+ */
+export const GLOBAL_IGNORE_FILE = '.stglobalignore';
+export const INCLUDE_LINE = `#include ${GLOBAL_IGNORE_FILE}`;
+
 /** A line that carries a pattern. Comments and blanks are not Rules. */
 export interface Rule {
     /** The line exactly as it appears in the file. */
@@ -29,17 +42,25 @@ export interface Rule {
     globs: string[];
     /** True when the tool wrote this line, i.e. it sits inside the managed block. */
     managed: boolean;
+    /** Which file the line came from. Null for `.stignore` itself. */
+    source: string | null;
 }
 
 export interface ParsedStignore {
+    /** Rules in evaluation order, with included files inlined where they appear. */
     rules: Rule[];
-    /** Every line of the file, unmodified. */
+    /** Every line of `.stignore`, unmodified. */
     lines: string[];
-    /** `#include` lines, which we preserve but cannot follow. */
+    /** `#include` targets found, in order. */
     includes: string[];
+    /** Includes we were asked to follow but could not read. Syncthing errors the folder on these. */
+    missingIncludes: string[];
     /** True if the file opens with `#escape=`, which changes escaping for the whole file. */
     hasEscapeDirective: boolean;
 }
+
+/** Reads an included file by name, relative to the folder root. Null when absent. */
+export type IncludeResolver = (name: string) => string | null;
 
 export const MANAGED_BEGIN = '// stignore: managed block. Lines here are rewritten by the tool.';
 export const MANAGED_END = '// stignore: end of managed block.';
@@ -72,7 +93,12 @@ export function compilePattern(pattern: string): string[] {
     return contentsOnly ? [base + '/**'] : [base, base + '/**'];
 }
 
-function parseLine(raw: string, line: number, managed: boolean): Rule | null {
+function parseLine(
+    raw: string,
+    line: number,
+    managed: boolean,
+    source: string | null
+): Rule | null {
     const trimmed = raw.trim();
     if (!trimmed) return null;
     if (trimmed.startsWith('//')) return null;
@@ -100,32 +126,70 @@ function parseLine(raw: string, line: number, managed: boolean): Rule | null {
         deletable,
         pattern: rest,
         globs: compilePattern(rest),
-        managed
+        managed,
+        source
     };
 }
 
-export function parseStignore(text: string): ParsedStignore {
+/**
+ * Parse `.stignore`, following `#include` when a resolver is given.
+ *
+ * Included patterns are inlined where the directive appears, because
+ * first-match-wins runs across the combined list and the position of the
+ * include decides what the included rules can still override.
+ */
+export function parseStignore(text: string, resolve?: IncludeResolver): ParsedStignore {
     const lines = text.split(/\r?\n/);
     const rules: Rule[] = [];
     const includes: string[] = [];
-    let inManaged = false;
+    const missingIncludes: string[] = [];
+    // Syncthing treats including the same file twice as an error, and it also
+    // stops us looping forever on a file that includes itself.
+    const seen = new Set<string>();
 
-    lines.forEach((raw, i) => {
-        const trimmed = raw.trim();
-        if (trimmed === MANAGED_BEGIN) { inManaged = true; return; }
-        if (trimmed === MANAGED_END) { inManaged = false; return; }
-        if (trimmed.startsWith('#include')) { includes.push(trimmed); return; }
+    function walk(body: string, source: string | null) {
+        let inManaged = false;
 
-        const rule = parseLine(raw, i, inManaged);
-        if (rule) rules.push(rule);
-    });
+        body.split(/\r?\n/).forEach((raw, i) => {
+            const trimmed = raw.trim();
+            if (trimmed === MANAGED_BEGIN) { inManaged = true; return; }
+            if (trimmed === MANAGED_END) { inManaged = false; return; }
+
+            if (trimmed.startsWith('#include')) {
+                const name = trimmed.slice('#include'.length).trim();
+                if (!name) return;
+                if (source === null) includes.push(name);
+                if (seen.has(name)) return;
+                seen.add(name);
+
+                const included = resolve ? resolve(name) : null;
+                if (included === null) {
+                    if (resolve) missingIncludes.push(name);
+                    return;
+                }
+                walk(included, name);
+                return;
+            }
+
+            const rule = parseLine(raw, i, inManaged, source);
+            if (rule) rules.push(rule);
+        });
+    }
+
+    walk(text, null);
 
     return {
         rules,
         lines,
         includes,
+        missingIncludes,
         hasEscapeDirective: (lines[0] || '').trim().startsWith('#escape=')
     };
+}
+
+/** True when `.stignore` delegates its patterns to the shared file. */
+export function isSharedMode(parsed: ParsedStignore): boolean {
+    return parsed.includes.includes(GLOBAL_IGNORE_FILE);
 }
 
 /**

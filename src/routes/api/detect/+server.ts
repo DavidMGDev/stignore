@@ -1,7 +1,7 @@
 import { json } from '@sveltejs/kit';
 import { findJunk } from '$lib/tree';
 import { getCwd } from '$lib/server/sys-utils';
-import { readStignore } from '$lib/server/stignore-file';
+import { readState } from '$lib/server/stignore-file';
 
 const DEFAULT_DEPTH = 3;
 const MAX_DEPTH = 8;
@@ -14,7 +14,7 @@ export async function GET({ url }) {
         ? Math.min(MAX_DEPTH, Math.max(1, Math.trunc(raw)))
         : DEFAULT_DEPTH;
 
-    const state = await readStignore();
+    const state = await readState();
 
     try {
         const found = await findJunk(getCwd(), depth, state.parsed.rules);

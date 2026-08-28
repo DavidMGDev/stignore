@@ -33,6 +33,19 @@ export async function POST({ request }) {
     const removePaths: string[] = Array.isArray(body.remove) ? body.remove : [];
     const expectMtimeMs = Number(body.expectMtimeMs) || 0;
 
+    // Catalogue patterns arrive as literal lines rather than paths, since
+    // `*.log` is a glob and not something that exists in the tree.
+    const cleanLine = (l: unknown) =>
+        typeof l === 'string' && l.trim() && !/[\r\n]/.test(l) && l.length < 512
+            ? l.trim()
+            : null;
+    const addLines0: string[] = (Array.isArray(body.addLines) ? body.addLines : [])
+        .map(cleanLine)
+        .filter(Boolean) as string[];
+    const removeLines: string[] = (Array.isArray(body.removeLines) ? body.removeLines : [])
+        .map(cleanLine)
+        .filter(Boolean) as string[];
+
     const bad = [...addPaths, ...removePaths].filter((p) => !isSafeRelPath(p));
     if (bad.length) {
         return json({ ok: false, error: 'Path outside the folder', bad }, { status: 400 });
@@ -46,7 +59,7 @@ export async function POST({ request }) {
     const rejected = pruned.filter((p) => !isWritablePath(p));
     const writable = pruned.filter((p) => isWritablePath(p));
 
-    const addLines: string[] = [];
+    const addLines: string[] = [...addLines0];
     for (const p of writable) {
         // (?d) only where the name says the contents are regenerable.
         let deletable = isJunkName(path.basename(p));
@@ -62,14 +75,14 @@ export async function POST({ request }) {
 
     // Removal targets both shapes, since we cannot know which one wrote the
     // line without reading it, and both are ours.
-    const removeLines = removePaths.flatMap((p) => [
-        lineForPath(p, true),
-        lineForPath(p, false)
-    ]);
+    const allRemoveLines = [
+        ...removeLines,
+        ...removePaths.flatMap((p) => [lineForPath(p, true), lineForPath(p, false)])
+    ];
 
-    logDebug('rules write', { add: addLines, remove: removeLines });
+    logDebug('rules write', { add: addLines, remove: allRemoveLines });
 
-    const result = await writeManaged(addLines, removeLines, expectMtimeMs, writable);
+    const result = await writeManaged(addLines, allRemoveLines, expectMtimeMs, writable);
 
     return json(
         {
