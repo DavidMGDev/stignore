@@ -83,7 +83,9 @@ which lines are shadowed and by what. A visible non-effect beats an invisible ov
 contents when they block removing an otherwise-empty parent, which is worth having for a
 `node_modules` and not worth having for a folder you picked by hand.
 
-The previous version of the file is kept as `.stignore.bak` after every write.
+The previous version is copied to your OS temp directory before every write. It deliberately
+does not sit next to `.stignore`: a backup inside the folder would sync to every device, and
+several devices each writing one would produce conflict files.
 
 ## Options
 
